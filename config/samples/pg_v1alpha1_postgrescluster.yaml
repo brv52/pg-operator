@@ -4,6 +4,22 @@ metadata:
   labels:
     app.kubernetes.io/name: pg-operator
     app.kubernetes.io/managed-by: kustomize
-  name: postgrescluster-sample
+  name: demo
 spec:
-  # TODO(user): Add fields here
+  instances: 3
+  synchronous:
+    method: any
+    number: 1
+  storage:
+    size: 1Gi
+  failover:
+    probeInterval: 1s
+    probeTimeout: 1s
+    failureThresholdK: 3
+    leaseDuration: 15s
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
