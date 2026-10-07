@@ -75,12 +75,12 @@ func StaticParameters() map[string]string {
 		"wal_retrieve_retry_interval":  "1s",
 		"password_encryption":          "scram-sha-256",
 		"logging_collector":            "off",
-		"log_line_prefix":              "%m [%p] %q%u@%d ",
 		"log_replication_commands":     "on",
 	}
 }
 
-// StaticFlags renders StaticParameters as sorted postgres arguments.
+// StaticFlags renders StaticParameters as sorted postgres arguments. No
+// value may contain whitespace: the instance script word-splits them.
 func StaticFlags() []string {
 	p := StaticParameters()
 	keys := make([]string, 0, len(p))
