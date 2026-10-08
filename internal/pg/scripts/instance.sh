@@ -90,6 +90,11 @@ clone() {
 rewind() {
 	log "rewinding against $PRIMARY_HOST"
 	rm -f "$PGDATA/standby.signal"
+	# After a kill, postmaster.pid still names the old postmaster, usually
+	# PID 1. Inside this init container PID 1 is alive (it is us), so
+	# postgres would refuse to start for crash recovery. Nothing else can
+	# be running on this RWO volume while the init container runs.
+	rm -f "$PGDATA/postmaster.pid"
 	# pg_rewind runs crash recovery itself when the target was not shut
 	# down cleanly (the usual case after a pod kill). When the timelines
 	# have not diverged it reports "no rewind required" and exits 0.
