@@ -218,6 +218,12 @@ type PostgresClusterStatus struct {
 	// +optional
 	Epoch int64 `json:"epoch,omitempty"`
 
+	// FailoverReason says why the current failover started. A
+	// "Switchover" is planned: the old primary is shut down gracefully and
+	// the operator waits for it to stop before electing a successor.
+	// +optional
+	FailoverReason string `json:"failoverReason,omitempty"`
+
 	// ProbeFailures counts consecutive failed primary probe rounds.
 	// +optional
 	ProbeFailures int32 `json:"probeFailures,omitempty"`
@@ -250,6 +256,16 @@ type PostgresClusterStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
+
+// Failover reasons.
+const (
+	ReasonPodMissing           = "PrimaryPodMissing"
+	ReasonPodTerminating       = "PrimaryPodTerminating"
+	ReasonProbeFailed          = "PrimaryProbeFailed"
+	ReasonPrimaryInRecovery    = "PrimaryInRecovery"
+	ReasonIsolatedFromReplicas = "PrimaryIsolatedFromReplicas"
+	ReasonSwitchover           = "Switchover"
+)
 
 // Condition types.
 const (

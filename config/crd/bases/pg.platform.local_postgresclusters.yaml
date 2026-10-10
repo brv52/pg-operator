@@ -299,6 +299,12 @@ spec:
                 - Promoting
                 - Reconfiguring
                 type: string
+              failoverReason:
+                description: |-
+                  FailoverReason says why the current failover started. A
+                  "Switchover" is planned: the old primary is shut down gracefully and
+                  the operator waits for it to stop before electing a successor.
+                type: string
               failoverStartTime:
                 description: FailoverStartTime is when the current failover left Healthy.
                 format: date-time
