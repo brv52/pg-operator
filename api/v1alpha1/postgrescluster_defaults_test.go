@@ -61,7 +61,7 @@ func TestDefaultKeepsExplicitValues(t *testing.T) {
 }
 
 func TestInstanceOrdinal(t *testing.T) {
-	c := &PostgresCluster{ObjectMeta: metav1.ObjectMeta{Name: "db"}}
+	c := &PostgresCluster{Name: "db"}
 	for name, want := range map[string]int{"db-1": 1, "db-12": 12, "db-0": 0, "db-x": 0, "other-1": 0, "db-1-2": 0} {
 		got, ok := c.InstanceOrdinal(name)
 		if (want == 0) == ok || got != want {

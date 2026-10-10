@@ -25,6 +25,8 @@ linters:
     - unused
     - logcheck
   settings:
+    goconst:
+      min-occurrences: 4
     custom:
       logcheck:
         type: "module"
@@ -45,6 +47,9 @@ linters:
   exclusions:
     generated: lax
     rules:
+      - linters:
+          - goconst
+        path: _test\.go
       - linters:
           - lll
         path: api/*

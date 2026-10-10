@@ -28,8 +28,8 @@ import (
 
 func validCluster() *PostgresCluster {
 	c := &PostgresCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "db"},
-		Spec:       PostgresClusterSpec{Synchronous: &SynchronousSpec{}},
+		Name: "db",
+		Spec: PostgresClusterSpec{Synchronous: &SynchronousSpec{}},
 	}
 	c.Default()
 	return c

@@ -130,13 +130,13 @@ func TestElect(t *testing.T) {
 // every commit the primary acknowledged.
 func TestElectNeverLosesAcknowledgedCommit(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1, 2))
-	for iter := 0; iter < 20000; iter++ {
+	for range 20000 {
 		m := 1 + rng.IntN(6)
 		n := 1 + rng.IntN(m)
 
 		flushed := make([]LSN, m)
 		var acked LSN
-		for step := 0; step < 30; step++ {
+		for step := range 30 {
 			// The primary writes a commit at the next LSN and some random
 			// subset of standbys flushes everything up to it.
 			commit := LSN(step + 1)

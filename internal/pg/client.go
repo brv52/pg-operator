@@ -166,7 +166,7 @@ func (c SQLClient) Observe(ctx context.Context, t Target) Observation {
 		o.Err = err
 		return o
 	}
-	defer conn.Close(context.WithoutCancel(ctx))
+	defer closeConn(ctx, conn)
 
 	var recv, replay, flush string
 	if err := conn.QueryRow(ctx, observeSQL).Scan(&o.InRecovery, &recv, &replay, &flush, &o.Timeline); err != nil {
@@ -249,7 +249,7 @@ func (c SQLClient) Promote(ctx context.Context, t Target, wait time.Duration) er
 	if err != nil {
 		return err
 	}
-	defer conn.Close(context.WithoutCancel(ctx))
+	defer closeConn(ctx, conn)
 
 	var inRecovery bool
 	if err := conn.QueryRow(ctx, "SELECT pg_is_in_recovery()").Scan(&inRecovery); err != nil {
@@ -277,7 +277,7 @@ func (c SQLClient) Fence(ctx context.Context, t Target) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close(context.WithoutCancel(ctx))
+	defer closeConn(ctx, conn)
 
 	for _, q := range []string{
 		"ALTER SYSTEM SET default_transaction_read_only = on",
@@ -302,7 +302,7 @@ func (c SQLClient) ApplySettings(ctx context.Context, t Target, settings map[str
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close(context.WithoutCancel(ctx))
+	defer closeConn(ctx, conn)
 
 	names := make([]string, 0, len(settings))
 	for k := range settings {
@@ -357,7 +357,7 @@ func (c SQLClient) EnsureSlots(ctx context.Context, t Target, want []string) err
 	if err != nil {
 		return err
 	}
-	defer conn.Close(context.WithoutCancel(ctx))
+	defer closeConn(ctx, conn)
 
 	rows, err := conn.Query(ctx, `SELECT slot_name, active FROM pg_replication_slots
 	                               WHERE slot_type = 'physical' AND slot_name LIKE $1`, SlotPrefix+"%")
@@ -404,9 +404,13 @@ func (c SQLClient) Checkpoint(ctx context.Context, t Target) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close(context.WithoutCancel(ctx))
+	defer closeConn(ctx, conn)
 	_, err = conn.Exec(ctx, "CHECKPOINT")
 	return err
+}
+
+func closeConn(ctx context.Context, conn *pgx.Conn) {
+	_ = conn.Close(context.WithoutCancel(ctx))
 }
 
 func seconds(f float64) time.Duration {
