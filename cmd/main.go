@@ -37,6 +37,7 @@ import (
 
 	pgv1alpha1 "github.com/brv52/pg-operator/api/v1alpha1"
 	"github.com/brv52/pg-operator/internal/controller"
+	"github.com/brv52/pg-operator/internal/pg"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -183,8 +184,10 @@ func main() {
 	}
 
 	if err := (&controller.PostgresClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		PG:       pg.SQLClient{},
+		Recorder: mgr.GetEventRecorder("pg-operator"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "postgrescluster")
 		os.Exit(1)
