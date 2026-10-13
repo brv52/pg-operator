@@ -17,9 +17,11 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -29,6 +31,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -38,6 +41,7 @@ import (
 	pgv1alpha1 "github.com/brv52/pg-operator/api/v1alpha1"
 	"github.com/brv52/pg-operator/internal/controller"
 	"github.com/brv52/pg-operator/internal/pg"
+	"github.com/brv52/pg-operator/internal/webhookcert"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -59,6 +63,7 @@ func main() {
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
 	var webhookPort int
+	var webhookCertSecret, webhookService, webhookConfigPrefix string
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
@@ -77,6 +82,13 @@ func main() {
 	flag.StringVar(&webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "Port the webhook server listens on. "+
 		"Defaults to 9443. Set -1 to disable the webhook server.")
+	flag.StringVar(&webhookCertSecret, "webhook-cert-secret", "",
+		"If set, the operator provisions its own webhook certificate in this Secret (in POD_NAMESPACE), "+
+			"writes it to --webhook-cert-path and injects the CA into the webhook configurations.")
+	flag.StringVar(&webhookService, "webhook-service", "pg-operator-webhook-service",
+		"Service fronting the webhook server; its DNS names go into the certificate.")
+	flag.StringVar(&webhookConfigPrefix, "webhook-configuration-prefix", "pg-operator-",
+		"Prefix of the mutating-/validating-webhook-configuration objects that receive the CA bundle.")
 	flag.StringVar(&metricsCertPath, "metrics-cert-path", "",
 		"The directory that contains the metrics server certificate.")
 	flag.StringVar(&metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
@@ -159,7 +171,31 @@ func main() {
 		metricsServerOptions.KeyName = metricsCertKey
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	restCfg := ctrl.GetConfigOrDie()
+	if webhookCertSecret != "" && webhookCertPath != "" && os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		direct, err := client.New(restCfg, client.Options{Scheme: scheme})
+		if err != nil {
+			setupLog.Error(err, "Failed to create bootstrap client")
+			os.Exit(1)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		err = webhookcert.Ensure(ctx, direct, webhookcert.Options{
+			Namespace:                      os.Getenv("POD_NAMESPACE"),
+			SecretName:                     webhookCertSecret,
+			ServiceName:                    webhookService,
+			MutatingWebhookConfiguration:   webhookConfigPrefix + "mutating-webhook-configuration",
+			ValidatingWebhookConfiguration: webhookConfigPrefix + "validating-webhook-configuration",
+			CertDir:                        webhookCertPath,
+		})
+		cancel()
+		if err != nil {
+			setupLog.Error(err, "Failed to provision webhook certificate")
+			os.Exit(1)
+		}
+		setupLog.Info("Webhook certificate ready", "secret", webhookCertSecret)
+	}
+
+	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -176,7 +212,7 @@ func main() {
 		// the manager stops, so would be fine to enable this option. However,
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
+		LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		setupLog.Error(err, "Failed to start manager")
