@@ -17,7 +17,6 @@ check() {
 echo "toolchain"
 check "go 1.27"               bash -c 'go version | grep -q "go1.27" && go version'
 check "kubebuilder 4.16.0"    bash -c 'kubebuilder version | grep -q "v4.16.0" && echo v4.16.0'
-check "kind"                  kind version
 check "k3d"                   k3d version
 
 echo "go modules"
@@ -28,7 +27,6 @@ done
 
 echo "images"
 for i in \
-	kindest/node:v1.37.0 \
 	postgres:18.6-bookworm \
 	ghcr.io/chaos-mesh/chaos-mesh:v2.8.5 \
 	ghcr.io/chaos-mesh/chaos-daemon:v2.8.5 \

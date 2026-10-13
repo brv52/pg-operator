@@ -17,9 +17,16 @@ spec:
     probeTimeout: 1s
     failureThresholdK: 3
     leaseDuration: 15s
+  # Sized for a laptop: three instances, Chaos Mesh and the checker fit in
+  # well under 1 GB together.
   resources:
     requests:
       cpu: 100m
-      memory: 256Mi
+      memory: 128Mi
     limits:
-      memory: 512Mi
+      memory: 256Mi
+  parameters:
+    shared_buffers: 32MB
+    max_connections: "60"
+    work_mem: 2MB
+    maintenance_work_mem: 16MB

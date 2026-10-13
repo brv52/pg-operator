@@ -1,0 +1,40 @@
+# Local cluster for e2e, chaos and benchmark runs, sized for an 8 GB
+# WSL2/laptop host: one k3s server and two agents give the three nodes
+# that one-instance-per-node anti-affinity needs, at roughly a third of
+# the memory of an equivalent kind cluster. The same layout, started from
+# the previous minor version, is used for the upgrade drill.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: pg-operator
+servers: 1
+agents: 2
+image: rancher/k3s:v1.37.1-k3s1@sha256:ca7f37d993d82ef0dcdcfecb2e0e2618ea541dbaffc620c8cedebe01a82acd0d
+options:
+  k3d:
+    wait: true
+    timeout: 180s
+    disableLoadbalancer: true
+  k3s:
+    extraArgs:
+      # Nothing in the benchmark uses ingress or LoadBalancer services, and
+      # the bundled metrics-server is ~60 MB we do not need.
+      - arg: --disable=traefik,servicelb,metrics-server
+        nodeFilters: [server:*]
+      - arg: --kubelet-arg=eviction-hard=memory.available<100Mi
+        nodeFilters: [server:*, agent:*]
+    nodeLabels:
+      - label: pg.platform.local/zone=a
+        nodeFilters: [server:0]
+      - label: pg.platform.local/zone=b
+        nodeFilters: [agent:0]
+      - label: pg.platform.local/zone=c
+        nodeFilters: [agent:1]
+  runtime:
+    # Hard caps so a runaway workload hits a pod OOM inside the cluster
+    # instead of freezing the host.
+    serversMemory: 1800m
+    agentsMemory: 1200m
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    switchCurrentContext: true

@@ -19,16 +19,21 @@ Resolved on 2026-10-24 against upstream registries and GitHub releases with
 
 | Component | Pinned | Resolved | Digest |
 |---|---|---|---|
-| kind | — | `v0.33.0` | |
-| kind node image | Kubernetes 1.37 | `kindest/node:v1.37.0` | `sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5` |
 | k3d | — | `v5.9.0` | |
+| k3s (e2e, chaos, benchmark) | Kubernetes 1.37 | `rancher/k3s:v1.37.1-k3s1` | `sha256:ca7f37d993d82ef0dcdcfecb2e0e2618ea541dbaffc620c8cedebe01a82acd0d` |
 | k3s (upgrade drill, from) | v1.36.x | `rancher/k3s:v1.36.5-k3s1` | `sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb` |
 | k3s (upgrade drill, to) | v1.37.x | `rancher/k3s:v1.37.1-k3s1` | `sha256:ca7f37d993d82ef0dcdcfecb2e0e2618ea541dbaffc620c8cedebe01a82acd0d` |
 | system-upgrade-controller | latest | `v0.20.2` | `sha256:61b68d4372baf7ae90fb0f879feea1c082381a8b7547cc5ec85d393c497b11cb` |
 
-Kubernetes `v1.37.1` is the latest upstream patch, but kind v0.33.0 only
-publishes a `v1.37.0` node image. The e2e and chaos clusters therefore run
-1.37.0; the upgrade drill runs the k3s 1.36.5 → 1.37.1 path.
+All local clusters are k3d (k3s in containers): one server and two agents,
+Kubernetes `v1.37.1`. kind was the first choice, but a 4-node kind cluster
+plus cert-manager, Chaos Mesh and two operators does not fit an 8 GB WSL2
+VM; k3s gives the same three real nodes, containerd runtime and Kubernetes
+API for roughly a third of the memory, and is also the distribution the
+upgrade drill (k3s 1.36.5 → 1.37.1 with system-upgrade-controller) needs.
+
+cert-manager is not used: the operator provisions its own webhook
+certificate (`internal/webhookcert`).
 
 ## Operand
 

@@ -110,6 +110,46 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	"$(GOLANGCI_LINT)" config verify
 
+##@ Local cluster (k3d, sized for an 8 GB host)
+
+K3D_CLUSTER ?= pg-operator
+LOCAL_IMG ?= pg-operator:dev
+PG_IMAGE ?= postgres:18.6-bookworm
+# Cap compile parallelism: an unbounded go build on many cores is the
+# single biggest memory spike of the local workflow.
+GO_BUILD_PARALLELISM ?= 4
+
+.PHONY: cluster-up
+cluster-up: ## Create the 3-node k3d cluster from hack/k3d-config.yaml.
+	k3d cluster create --config hack/k3d-config.yaml
+
+.PHONY: cluster-down
+cluster-down: ## Delete the k3d cluster.
+	k3d cluster delete $(K3D_CLUSTER)
+
+.PHONY: image-local
+image-local: ## Build the manager on the host and package it into $(LOCAL_IMG).
+	mkdir -p bin/image
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -p $(GO_BUILD_PARALLELISM) -trimpath -o bin/image/manager cmd/main.go
+	$(CONTAINER_TOOL) build -q -t $(LOCAL_IMG) -f hack/manager.Dockerfile bin/image
+
+.PHONY: images-import
+images-import: image-local ## Import the operator and PostgreSQL images into the k3d nodes.
+	$(CONTAINER_TOOL) image inspect $(PG_IMAGE) >/dev/null 2>&1 || $(CONTAINER_TOOL) pull -q $(PG_IMAGE)
+	@# Export a single platform: with Docker's containerd image store a plain
+	@# save references layers of platforms that were never pulled, and the
+	@# import into the nodes fails with "content digest not found".
+	$(CONTAINER_TOOL) save --platform linux/amd64 -o bin/image/images.tar $(LOCAL_IMG) $(PG_IMAGE)
+	k3d image import -c $(K3D_CLUSTER) bin/image/images.tar
+	rm -f bin/image/images.tar
+
+.PHONY: deploy-local
+deploy-local: manifests kustomize images-import ## Deploy the operator into the k3d cluster.
+	cd config/manager && "$(KUSTOMIZE)" edit set image controller=$(LOCAL_IMG)
+	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply --server-side --force-conflicts -f -
+	"$(KUBECTL)" -n pg-operator-system rollout restart deploy/pg-operator-controller-manager
+	"$(KUBECTL)" -n pg-operator-system rollout status deploy/pg-operator-controller-manager --timeout=180s
+
 ##@ Build
 
 .PHONY: build
