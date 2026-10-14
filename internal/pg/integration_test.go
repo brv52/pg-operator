@@ -16,7 +16,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-
 package pg
 
 import (
@@ -213,6 +212,8 @@ func TestFailoverAndRewind(t *testing.T) {
 		t.Fatalf("ALTER SYSTEM on a standby: %v", err)
 	}
 
+	primaryTimeline := observe(p1).Timeline
+
 	// Cut the primary off and make it commit something no standby has.
 	// synchronous_commit=local is a per-session downgrade any client can
 	// make; it is exactly the write that pg_rewind must throw away.
@@ -224,7 +225,14 @@ func TestFailoverAndRewind(t *testing.T) {
 	var cands []Candidate
 	for i, s := range []Target{p2, p3} {
 		h.eventually(s.Name+" reachable", func() bool { return observe(s).Reachable })
+		// The primary is gone, so the WAL receiver has exited and
+		// pg_stat_wal_receiver is empty: the timeline must still come out
+		// right, or the election would rank by a stale value.
+		h.eventually(s.Name+" receiver gone", func() bool { o := observe(s); return !o.Streaming })
 		o := observe(s)
+		if o.Timeline != primaryTimeline {
+			t.Fatalf("%s reports timeline %d with its WAL receiver down, primary was on %d", s.Name, o.Timeline, primaryTimeline)
+		}
 		cands = append(cands, Candidate{Name: s.Name, Ordinal: i + 2, Reachable: o.Reachable,
 			InRecovery: o.InRecovery, Timeline: o.Timeline, ReceiveLSN: o.ReceiveLSN, ReplayLSN: o.ReplayLSN})
 	}
@@ -283,6 +291,18 @@ func TestFailoverAndRewind(t *testing.T) {
 	if o := observe(p1); o.Settings["default_transaction_read_only"] != "off" {
 		t.Fatalf("rejoined instance kept read_only=%s", o.Settings["default_transaction_read_only"])
 	}
+	// Second failure, now on timeline 2: the two remaining standbys (one
+	// re-pointed, one rewound) must both report timeline 2 once their WAL
+	// receivers are down, without a checkpoint having moved their
+	// restartpoint onto the new timeline.
+	h.docker("kill", h.prefix+"-"+newPrimary.Name)
+	for _, s := range []Target{p1, follower} {
+		h.eventually(s.Name+" receiver gone", func() bool { o := observe(s); return o.Reachable && !o.Streaming })
+		if o := observe(s); o.Timeline != primaryTimeline+1 {
+			t.Fatalf("%s reports timeline %d after the second failure, want %d", s.Name, o.Timeline, primaryTimeline+1)
+		}
+	}
+
 	logs := h.docker("logs", h.prefix+"-pg1")
 	if !strings.Contains(logs, "rewinding against") || strings.Contains(logs, "falling back to a full clone") {
 		t.Fatalf("expected a pg_rewind rejoin without clone fallback:\n%s", logs)

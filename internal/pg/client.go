@@ -136,8 +136,16 @@ SELECT pg_is_in_recovery(),
        coalesce(pg_last_wal_replay_lsn()::text, ''),
        CASE WHEN pg_is_in_recovery() THEN '' ELSE pg_current_wal_flush_lsn()::text END,
        CASE WHEN pg_is_in_recovery()
-            THEN coalesce((SELECT received_tli::bigint FROM pg_stat_wal_receiver),
-                          (SELECT timeline_id::bigint FROM pg_control_checkpoint()))
+            -- The WAL receiver row disappears as soon as the primary dies,
+            -- which is exactly when the election needs the timeline, and
+            -- pg_control_checkpoint() lags at the last restartpoint. The
+            -- newest segment in pg_wal is named after the timeline of the
+            -- last WAL this standby received, receiver running or not.
+            THEN greatest(
+                   (SELECT received_tli::bigint FROM pg_stat_wal_receiver),
+                   (SELECT max(('x' || substr(name, 1, 8))::bit(32)::bigint)
+                      FROM pg_ls_waldir() WHERE name ~ '^[0-9A-F]{24}$'),
+                   (SELECT timeline_id::bigint FROM pg_control_checkpoint()))
             ELSE ('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::bigint
        END`
 
