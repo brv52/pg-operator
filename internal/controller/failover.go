@@ -332,8 +332,11 @@ func (rc *round) promote(ctx context.Context) error {
 				return errWait
 			}
 		}
-		var cands []pg.Candidate
 		standbys := rc.set.others(oldName)
+		if err := rc.freezeStandbys(ctx, standbys); err != nil {
+			return err
+		}
+		var cands []pg.Candidate
 		for _, s := range standbys {
 			cands = append(cands, pg.Candidate{
 				Name: s.name, Ordinal: s.ordinal, Reachable: s.obs.Reachable && !s.terminating(),
@@ -372,6 +375,57 @@ func (rc *round) promote(ctx context.Context) error {
 	c.Status.CurrentPrimary = target.name
 	c.Status.FailoverPhase = pgv1.PhaseReconfiguring
 	return rc.persist(ctx)
+}
+
+// freezeTimeout bounds how long the election waits for WAL receivers to
+// stop after their upstream has been cleared.
+const freezeTimeout = 2 * time.Second
+
+// freezeStandbys stops every reachable standby from receiving more WAL and
+// re-observes it, so the election compares final positions.
+//
+// A killed primary is not necessarily dead yet when its pod object is
+// gone: the container gets a moment to run the preStop fast shutdown, and
+// its walsenders ship the shutdown checkpoint to whichever standbys are
+// still connected. If the election samples LSNs before that record
+// arrives, the loser can end up one record past the point where the
+// winner's new timeline forks and can never follow it. Clearing
+// primary_conninfo makes each WAL receiver exit; Reconfiguring sets the
+// new upstream afterwards.
+func (rc *round) freezeStandbys(ctx context.Context, standbys []*instance) error {
+	detach := map[string]string{"primary_conninfo": ""}
+	var frozen []*instance
+	for _, s := range standbys {
+		if !s.obs.Reachable || !s.obs.InRecovery || s.terminating() {
+			continue
+		}
+		actx, cancel := context.WithTimeout(ctx, rc.c.Spec.Failover.ProbeTimeout.Duration)
+		_, err := rc.r.PG.ApplySettings(actx, s.target(rc.password), detach)
+		cancel()
+		if err != nil {
+			// Unreachable now: it is simply not a voter this round.
+			s.obs.Reachable = false
+			continue
+		}
+		frozen = append(frozen, s)
+	}
+
+	deadline := time.Now().Add(freezeTimeout)
+	for _, s := range frozen {
+		for {
+			octx, cancel := context.WithTimeout(ctx, rc.c.Spec.Failover.ProbeTimeout.Duration)
+			s.obs = rc.r.PG.Observe(octx, s.target(rc.password))
+			cancel()
+			if !s.obs.Reachable || s.obs.UpstreamHost == "" && !s.obs.Streaming {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("%w: WAL receiver of %s still running", errWait, s.name)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	return nil
 }
 
 // reconfigure points the surviving standbys at the new primary and

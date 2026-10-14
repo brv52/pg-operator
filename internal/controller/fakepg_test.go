@@ -48,6 +48,7 @@ type fakePG struct {
 	instances map[string]*fakeInstance
 	promoted  []string
 	fenced    []string
+	detached  []string
 }
 
 var _ pg.Client = (*fakePG)(nil)
@@ -158,6 +159,10 @@ func (f *fakePG) ApplySettings(_ context.Context, t pg.Target, s map[string]stri
 			i.settings[k] = v
 			changed = append(changed, k)
 		}
+	}
+	if conninfo, ok := s["primary_conninfo"]; ok && conninfo == "" {
+		i.streaming = false
+		f.detached = append(f.detached, t.Name)
 	}
 	return changed, nil
 }

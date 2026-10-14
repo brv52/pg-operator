@@ -224,6 +224,8 @@ var _ = Describe("PostgresCluster controller", func() {
 		Expect(c.Status.Epoch).To(Equal(int64(2)))
 		Expect(c.Status.LastFailoverDuration).NotTo(BeNil())
 		Expect(h.fake.promotedNames()).To(Equal([]string{h.inst(3)}))
+		Expect(h.fake.detached).To(ConsistOf(h.inst(2), h.inst(3)),
+			"both standbys stop receiving WAL before LSNs are compared")
 
 		p3 := h.pod(h.inst(3))
 		Expect(p3.Labels).To(HaveKeyWithValue(pgv1.LabelRole, pgv1.RolePrimary))
