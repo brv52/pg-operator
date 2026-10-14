@@ -64,6 +64,9 @@ type PostgresClusterReconciler struct {
 	// persisted: after an operator restart, detection simply starts over.
 	mu          sync.Mutex
 	lastCounted map[types.NamespacedName]time.Time
+	// offTimeline records when each standby was first seen stuck on an
+	// older timeline (see recreateDivergedStandbys).
+	offTimeline map[string]time.Time
 }
 
 // +kubebuilder:rbac:groups=pg.platform.local,resources=postgresclusters,verbs=get;list;watch;create;update;patch;delete

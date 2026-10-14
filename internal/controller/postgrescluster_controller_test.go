@@ -247,6 +247,29 @@ var _ = Describe("PostgresCluster controller", func() {
 		Expect(h.env(p1, "PRIMARY_HOST")).To(HavePrefix("db-3.db-instances."))
 	})
 
+	It("gives a re-pointed standby time to follow the new timeline before recreating it", func() {
+		h.healthy()
+		h.fake.standby(h.inst(2), 100, false)
+		h.fake.standby(h.inst(3), 250, false)
+		h.kill(h.inst(1))
+		h.tick()
+		Expect(h.cluster().Status.CurrentPrimary).To(Equal(h.inst(3)))
+		uid := h.pod(h.inst(2)).UID
+
+		// db-3 is primary on timeline 2; db-2 is still on timeline 1 and
+		// reconnecting. That is normal for a second or two.
+		h.fake.primary(h.inst(3), 260)
+		for range 5 {
+			h.tick()
+		}
+		Expect(h.pod(h.inst(2)).UID).To(Equal(uid), "a standby catching up must not be recreated")
+
+		// Still stuck half a minute later: it cannot follow, rewind it.
+		h.clock = h.clock.Add(divergedAfter)
+		h.tick()
+		Expect(h.pod(h.inst(2))).To(BeNil())
+	})
+
 	It("needs K consecutive failed probe rounds and resets on recovery", func() {
 		h.healthy()
 		h.fake.down(h.inst(1))

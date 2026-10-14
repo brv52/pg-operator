@@ -130,27 +130,58 @@ func (rc *round) convergeSQL(ctx context.Context, p *instance) error {
 	return nil
 }
 
-// recreateDivergedStandbys deletes standbys that are on an older timeline
-// than the primary and not streaming. That is the signature of an instance
-// that cannot follow the timeline switch, typically a former primary whose
-// container restarted in place (the self-fence kept it out of service but
-// it still carries diverged WAL). The recreated pod goes through pg_rewind.
+// divergedAfter is how long a standby must stay off the primary's timeline
+// without streaming before it is recreated. Right after a failover every
+// surviving standby is briefly in exactly that state while it reconnects
+// and follows the timeline switch, which takes a second or two.
+const divergedAfter = 30 * time.Second
+
+// recreateDivergedStandbys deletes standbys that have been on an older
+// timeline than the primary, without streaming, for longer than
+// divergedAfter. That is the signature of an instance that cannot follow
+// the timeline switch, typically a former primary whose container
+// restarted in place (the self-fence kept it out of service but it still
+// carries diverged WAL). The recreated pod goes through pg_rewind.
 func (rc *round) recreateDivergedStandbys(ctx context.Context, p *instance) error {
+	now := rc.r.now()
 	for _, s := range rc.set.others(p.name) {
-		if !s.obs.Reachable || !s.obs.InRecovery || s.obs.Streaming || s.terminating() {
-			continue
-		}
-		if s.obs.Timeline >= p.obs.Timeline || time.Since(s.pod.CreationTimestamp.Time) < time.Minute {
+		key := client.ObjectKeyFromObject(rc.c).String() + "/" + s.name
+		lagging := s.obs.Reachable && s.obs.InRecovery && !s.obs.Streaming && !s.terminating() &&
+			s.obs.Timeline < p.obs.Timeline
+		since, seen := rc.r.offTimelineSince(key, lagging, now)
+		if !lagging || !seen || now.Sub(since) < divergedAfter {
 			continue
 		}
 		rc.log.Info("standby cannot follow the primary timeline, recreating it", "instance", s.name,
-			"timeline", s.obs.Timeline, "primaryTimeline", p.obs.Timeline)
+			"timeline", s.obs.Timeline, "primaryTimeline", p.obs.Timeline, "since", since)
 		rc.r.event(rc.c, corev1.EventTypeWarning, "StandbyDiverged", "recreating %s to rewind it", s.name)
 		if err := rc.r.Delete(ctx, s.pod, client.Preconditions{UID: &s.pod.UID}); client.IgnoreNotFound(err) != nil {
 			return err
 		}
+		rc.r.offTimelineSince(key, false, now)
 	}
 	return nil
+}
+
+// offTimelineSince tracks, in memory, when a standby was first seen lagging
+// on an old timeline. It returns that time and whether it was already
+// tracked before this call; passing lagging=false forgets the standby.
+func (r *PostgresClusterReconciler) offTimelineSince(key string, lagging bool, now time.Time) (time.Time, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !lagging {
+		delete(r.offTimeline, key)
+		return time.Time{}, false
+	}
+	if r.offTimeline == nil {
+		r.offTimeline = map[string]time.Time{}
+	}
+	since, ok := r.offTimeline[key]
+	if !ok {
+		r.offTimeline[key] = now
+		return now, false
+	}
+	return since, true
 }
 
 // convergePods creates missing instances as replicas of the current primary
