@@ -51,9 +51,15 @@ const podNodeIndex = "spec.nodeName"
 // PostgresClusterReconciler reconciles a PostgresCluster object.
 type PostgresClusterReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	PG       pg.Client
-	Recorder events.EventRecorder
+	Scheme *runtime.Scheme
+	// APIReader reads the PostgresCluster straight from the API server.
+	// The failover phase is the state machine's source of truth; acting
+	// on a cached copy that lags the previous round's status write would
+	// either redo a phase or fail the next transition with a conflict and
+	// lose a whole probe interval. Falls back to Client when nil.
+	APIReader client.Reader
+	PG        pg.Client
+	Recorder  events.EventRecorder
 	// Now is the clock; tests replace it.
 	Now func() time.Time
 
@@ -88,7 +94,11 @@ func (r *PostgresClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	log := logf.FromContext(ctx)
 
 	var cluster pgv1.PostgresCluster
-	if err := r.Get(ctx, req.NamespacedName, &cluster); err != nil {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	if err := reader.Get(ctx, req.NamespacedName, &cluster); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if cluster.DeletionTimestamp != nil {
@@ -117,7 +127,7 @@ func (r *PostgresClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if err := rc.bootstrap(ctx); err != nil {
 			return ctrl.Result{}, err
 		}
-		return requeue, rc.writeStatus(ctx)
+		return finish(requeue, rc.writeStatus(ctx))
 	}
 
 	if err := rc.step(ctx); err != nil {
@@ -134,7 +144,22 @@ func (r *PostgresClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := rc.ensureLease(ctx); err != nil {
 		log.Error(err, "lease update failed")
 	}
-	return requeue, rc.writeStatus(ctx)
+	return finish(requeue, rc.writeStatus(ctx))
+}
+
+// finish turns the final status write into a result. A conflict means
+// someone (usually a user editing the spec) changed the object during the
+// round; everything the round did is idempotent, so it is simply re-run
+// right away against fresh state instead of being reported as an error.
+func finish(requeue ctrl.Result, err error) (ctrl.Result, error) {
+	switch {
+	case err == nil:
+		return requeue, nil
+	case apierrors.IsConflict(err):
+		return ctrl.Result{RequeueAfter: 50 * time.Millisecond}, nil
+	default:
+		return ctrl.Result{}, err
+	}
 }
 
 // round carries the state of one reconcile.

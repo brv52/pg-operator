@@ -220,10 +220,11 @@ func main() {
 	}
 
 	if err := (&controller.PostgresClusterReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		PG:       pg.SQLClient{},
-		Recorder: mgr.GetEventRecorder("pg-operator"),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		APIReader: mgr.GetAPIReader(),
+		PG:        pg.SQLClient{},
+		Recorder:  mgr.GetEventRecorder("pg-operator"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "postgrescluster")
 		os.Exit(1)
