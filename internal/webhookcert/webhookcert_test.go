@@ -26,7 +26,6 @@ import (
 
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -35,12 +34,12 @@ import (
 func setup(t *testing.T) (client.Client, Options) {
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
 		&admissionregistrationv1.MutatingWebhookConfiguration{
-			ObjectMeta: metav1.ObjectMeta{Name: "mwc"},
-			Webhooks:   []admissionregistrationv1.MutatingWebhook{{Name: "m.example.com"}},
+			Name:     "mwc",
+			Webhooks: []admissionregistrationv1.MutatingWebhook{{Name: "m.example.com"}},
 		},
 		&admissionregistrationv1.ValidatingWebhookConfiguration{
-			ObjectMeta: metav1.ObjectMeta{Name: "vwc"},
-			Webhooks:   []admissionregistrationv1.ValidatingWebhook{{Name: "v.example.com"}},
+			Name:     "vwc",
+			Webhooks: []admissionregistrationv1.ValidatingWebhook{{Name: "v.example.com"}},
 		},
 	).Build()
 	return c, Options{

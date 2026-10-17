@@ -41,9 +41,8 @@ func WriteEDN(history []Op, path string) error {
 	w := bufio.NewWriter(f)
 
 	type event struct {
-		at    int64
-		index int
-		line  string
+		at   int64
+		line string
 	}
 	var events []event
 	for _, op := range history {
@@ -64,8 +63,8 @@ func WriteEDN(history []Op, path string) error {
 		}
 		typ := map[Status]string{StatusOK: ":ok", StatusFail: ":fail", StatusInfo: ":info"}[op.Status]
 		events = append(events,
-			event{at: op.Call, line: fmt.Sprintf("{:type :invoke, :f :txn, :value [%s], :process %d, :time %d}", invoke, op.Client, op.Call)},
-			event{at: op.Return, line: fmt.Sprintf("{:type %s, :f :txn, :value [%s], :process %d, :time %d}", typ, mop, op.Client, op.Return)},
+			event{at: op.Call, line: ednEvent(":invoke", invoke, op.Client, op.Call)},
+			event{at: op.Return, line: ednEvent(typ, mop, op.Client, op.Return)},
 		)
 	}
 	slices.SortStableFunc(events, func(a, b event) int {
@@ -83,4 +82,8 @@ func WriteEDN(history []Op, path string) error {
 		}
 	}
 	return w.Flush()
+}
+
+func ednEvent(typ, value string, process int, at int64) string {
+	return fmt.Sprintf("{:type %s, :f :txn, :value [%s], :process %d, :time %d}", typ, value, process, at)
 }

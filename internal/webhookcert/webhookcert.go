@@ -43,7 +43,6 @@ import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -110,10 +109,7 @@ func ensureSecret(ctx context.Context, c client.Client, o Options) (*corev1.Secr
 		err := c.Get(ctx, client.ObjectKey{Namespace: o.Namespace, Name: o.SecretName}, &s)
 		switch {
 		case apierrors.IsNotFound(err):
-			s = corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{Namespace: o.Namespace, Name: o.SecretName},
-				Type:       corev1.SecretTypeTLS,
-			}
+			s = corev1.Secret{Namespace: o.Namespace, Name: o.SecretName, Type: corev1.SecretTypeTLS}
 			if s.Data, err = generate(o); err != nil {
 				return nil, err
 			}

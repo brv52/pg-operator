@@ -100,15 +100,15 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
-	"$(GOLANGCI_LINT)" run
+	"$(GOLANGCI_LINT_CUSTOM)" run
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
-	"$(GOLANGCI_LINT)" run --fix
+	"$(GOLANGCI_LINT_CUSTOM)" run --fix
 
 .PHONY: lint-config
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
-	"$(GOLANGCI_LINT)" config verify
+	"$(GOLANGCI_LINT_CUSTOM)" config verify
 
 ##@ Local cluster (k3d, sized for an 8 GB host)
 
@@ -235,6 +235,7 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+GOLANGCI_LINT_CUSTOM = $(LOCALBIN)/golangci-lint-custom-$(GOLANGCI_LINT_VERSION)
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.8.1
@@ -275,14 +276,15 @@ $(ENVTEST): $(LOCALBIN)
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: golangci-lint
-golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
+golangci-lint: $(GOLANGCI_LINT_CUSTOM) ## Download golangci-lint and build it with the logcheck plugin if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
-	@test -f .custom-gcl.yml && { \
-		echo "Building custom golangci-lint with plugins..." && \
-		$(GOLANGCI_LINT) custom --destination $(LOCALBIN) --name golangci-lint-custom && \
-		mv -f $(LOCALBIN)/golangci-lint-custom $(GOLANGCI_LINT); \
-	} || true
+
+# The plugin build compiles all of golangci-lint. It gets its own versioned
+# file so it is built once, not on every run, and with the same parallelism
+# cap as the other builds.
+$(GOLANGCI_LINT_CUSTOM): .custom-gcl.yml | $(GOLANGCI_LINT)
+	GOFLAGS=-p=$(GO_BUILD_PARALLELISM) "$(GOLANGCI_LINT)" custom --destination $(LOCALBIN) --name $(notdir $@)
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
