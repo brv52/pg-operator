@@ -169,6 +169,7 @@ var _ = Describe("PostgresCluster controller", func() {
 		Expect(p1).NotTo(BeNil())
 		Expect(p1.Labels).To(HaveKeyWithValue(pgv1.LabelRole, pgv1.RolePrimary))
 		Expect(h.env(p1, "ROLE")).To(Equal("primary"))
+		Expect(h.env(p1, "ALLOW_INITDB")).To(Equal("true"))
 		Expect(h.pod(h.inst(2))).To(BeNil(), "replicas wait for a working primary")
 
 		for _, n := range []string{"db-rw", "db-ro", "db-instances"} {

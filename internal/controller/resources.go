@@ -223,6 +223,7 @@ func buildPod(c *pgv1.PostgresCluster, name, role, primaryInstance string, epoch
 		{Name: "POD_NAME", Value: name},
 		{Name: "ROLE", Value: scriptRole},
 		{Name: "PRIMARY_HOST", Value: instanceHost(c, primaryInstance)},
+		{Name: "RW_HOST", Value: fmt.Sprintf("%s.%s.svc", c.ReadWriteServiceName(), c.Namespace)},
 		{Name: "PGDATA", Value: pgdata},
 		{Name: "SLOT_NAME", Value: pg.SlotName(name)},
 		{Name: "STATIC_FLAGS", Value: strings.Join(pg.StaticFlags(), " ")},

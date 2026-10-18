@@ -71,11 +71,11 @@ func newHarness(t *testing.T) *harness {
 	h.docker("network", "create", h.network)
 	t.Cleanup(func() {
 		out, _ := exec.Command("docker", "ps", "-aq", "--filter", "name="+h.prefix).Output()
-		for _, id := range strings.Fields(string(out)) {
+		for id := range strings.FieldsSeq(string(out)) {
 			_ = exec.Command("docker", "rm", "-f", "-v", id).Run()
 		}
 		out, _ = exec.Command("docker", "volume", "ls", "-q", "--filter", "name="+h.prefix).Output()
-		for _, v := range strings.Fields(string(out)) {
+		for v := range strings.FieldsSeq(string(out)) {
 			_ = exec.Command("docker", "volume", "rm", "-f", v).Run()
 		}
 		_ = exec.Command("docker", "network", "rm", h.network).Run()
@@ -92,25 +92,44 @@ func (h *harness) docker(args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// start runs an instance container. name doubles as the hostname, the
-// application_name and the volume name, like a pod and its PVC.
+// start runs an instance container and waits until it answers. name
+// doubles as the hostname, the application_name and the volume name, like
+// a pod and its PVC. A primary is started the way the operator bootstraps
+// one, allowed to initdb an empty volume.
 func (h *harness) start(name, role, primaryHost string) Target {
+	h.t.Helper()
+	var env []string
+	if role == "primary" {
+		env = append(env, "ALLOW_INITDB=true")
+	}
+	c := h.run(name, role, primaryHost, env...)
+	ip := h.docker("inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", c)
+	t := Target{Name: name, Host: ip, Password: superPW}
+	h.waitReady(t)
+	return t
+}
+
+// run starts an instance container without waiting for it and returns the
+// container name.
+func (h *harness) run(name, role, primaryHost string, env ...string) string {
 	h.t.Helper()
 	flags := strings.Join(StaticFlags(), " ")
 	c := h.prefix + "-" + name
-	h.docker("run", "-d", "--name", c, "--hostname", name, "--network", h.network, "--network-alias", name,
+	args := make([]string, 0, 64)
+	args = append(args, "run", "-d", "--name", c, "--hostname", name, "--network", h.network, "--network-alias", name,
 		"--user", "999:999",
 		"-v", h.prefix+"-"+name+":/var/lib/postgresql",
 		"-v", h.scripts+"/instance.sh:/scripts/instance.sh:ro",
 		"-v", h.scripts+"/pg_hba.conf:/etc/pg/pg_hba.conf:ro",
 		"-e", "POD_NAME="+name, "-e", "ROLE="+role, "-e", "PRIMARY_HOST="+primaryHost,
 		"-e", "PGDATA="+pgdata, "-e", "SUPERUSER_PASSWORD="+superPW, "-e", "REPLICATION_PASSWORD="+replPW,
-		"-e", "SLOT_NAME="+SlotName(name), "-e", "STATIC_FLAGS="+flags,
-		"--entrypoint", "sh", image, "-c", "/scripts/instance.sh init && exec /scripts/instance.sh run")
-	ip := h.docker("inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", c)
-	t := Target{Name: name, Host: ip, Password: superPW}
-	h.waitReady(t)
-	return t
+		"-e", "SLOT_NAME="+SlotName(name), "-e", "STATIC_FLAGS="+flags)
+	for _, e := range env {
+		args = append(args, "-e", e)
+	}
+	args = append(args, "--entrypoint", "sh", image, "-c", "/scripts/instance.sh init && exec /scripts/instance.sh run")
+	h.docker(args...)
+	return c
 }
 
 func (h *harness) waitReady(t Target) {
@@ -137,7 +156,7 @@ func (h *harness) exec(t Target, sql string, args ...any) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 	if _, err := conn.Exec(ctx, sql, args...); err != nil {
 		h.t.Fatalf("%s on %s: %v", sql, t.Name, err)
 	}
@@ -151,7 +170,7 @@ func (h *harness) count(t Target, where string) int {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 	var n int
 	if err := conn.QueryRow(ctx, "SELECT count(*) FROM kv WHERE "+where).Scan(&n); err != nil {
 		h.t.Fatal(err)
@@ -200,7 +219,7 @@ func TestFailoverAndRewind(t *testing.T) {
 	})
 
 	h.exec(p1, "CREATE TABLE kv (k int PRIMARY KEY, src text)")
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		h.exec(p1, "INSERT INTO kv VALUES ($1, 'acked')", i)
 	}
 
@@ -222,7 +241,7 @@ func TestFailoverAndRewind(t *testing.T) {
 		"SET synchronous_commit = local; INSERT INTO kv SELECT g, 'diverged' FROM generate_series(1000, 1100) g")
 	h.docker("kill", h.prefix+"-pg1")
 
-	var cands []Candidate
+	cands := make([]Candidate, 0, 2)
 	for i, s := range []Target{p2, p3} {
 		h.eventually(s.Name+" reachable", func() bool { return observe(s).Reachable })
 		// The primary is gone, so the WAL receiver has exited and
@@ -306,5 +325,55 @@ func TestFailoverAndRewind(t *testing.T) {
 	logs := h.docker("logs", h.prefix+"-pg1")
 	if !strings.Contains(logs, "rewinding against") || strings.Contains(logs, "falling back to a full clone") {
 		t.Fatalf("expected a pg_rewind rejoin without clone fallback:\n%s", logs)
+	}
+}
+
+// TestRestartWithoutPrimary is a whole-cluster restart: every pod is
+// recreated at once, so a standby's init container runs while no primary
+// is reachable. It must keep its data directory and start as a standby,
+// not rewind against nothing and fall back to setting its data aside.
+func TestRestartWithoutPrimary(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	p1 := h.start("pg1", "primary", "")
+	if err := (SQLClient{}).EnsureSlots(ctx, p1, []string{SlotName("pg2")}); err != nil {
+		t.Fatal(err)
+	}
+	h.start("pg2", "replica", "pg1")
+	h.eventually("standby streaming", func() bool { return len(observe(p1).StreamingReplicas(10*time.Second)) == 1 })
+	if _, err := (SQLClient{}).ApplySettings(ctx, p1, map[string]string{
+		"synchronous_standby_names": SyncStandbyNames("any", 1, []string{"pg2"}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// remote_apply: the rows are visible on the standby once this returns.
+	h.exec(p1, "SET synchronous_commit = remote_apply; CREATE TABLE kv (k int PRIMARY KEY); INSERT INTO kv SELECT generate_series(1, 100)")
+
+	h.docker("rm", "-f", h.prefix+"-pg1", h.prefix+"-pg2")
+	p2 := h.start("pg2", "replica", "pg1")
+	if o := observe(p2); !o.InRecovery {
+		t.Fatal("restarted standby is not in recovery")
+	}
+	if got := h.count(p2, "true"); got != 100 {
+		t.Fatalf("restarted standby has %d rows, want 100", got)
+	}
+	logs := h.docker("logs", h.prefix+"-pg2")
+	if !strings.Contains(logs, "without rewinding") || strings.Contains(logs, "full clone") {
+		t.Fatalf("standby did not keep its data directory:\n%s", logs)
+	}
+
+	// The primary comes back on its volume and the standby reconnects to it.
+	p1 = h.start("pg1", "primary", "")
+	h.eventually("standby streaming again", func() bool { return len(observe(p1).StreamingReplicas(10*time.Second)) == 1 })
+
+	// A primary pod on an empty volume that is not the cluster's first
+	// bootstrap must not create a fresh database.
+	c := h.run("pg3", "primary", "")
+	if code := h.docker("wait", c); code != "1" {
+		t.Fatalf("primary on an empty volume exited with %s, want 1", code)
+	}
+	if logs := h.docker("logs", c); !strings.Contains(logs, "refusing to initdb") {
+		t.Fatalf("expected an initdb refusal:\n%s", logs)
 	}
 }

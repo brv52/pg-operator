@@ -333,6 +333,11 @@ func (rc *round) bootstrap(ctx context.Context) error {
 			return err
 		}
 		pod := buildPod(c, first.name, pgv1.RolePrimary, first.name, 1)
+		// Only this pod may create a database. Every later primary pod is
+		// recreated on a volume that must already hold one, and an empty
+		// one there means lost data, not a new cluster.
+		bootstrap := &pod.Spec.InitContainers[0]
+		bootstrap.Env = append(bootstrap.Env, corev1.EnvVar{Name: "ALLOW_INITDB", Value: "true"})
 		rc.log.Info("bootstrapping first instance", "pod", first.name)
 		return client.IgnoreAlreadyExists(rc.r.Create(ctx, pod))
 	}
