@@ -122,6 +122,12 @@ GO_BUILD_PARALLELISM ?= 4
 .PHONY: cluster-up
 cluster-up: ## Create the 3-node k3d cluster from hack/k3d-config.yaml.
 	k3d cluster create --config hack/k3d-config.yaml
+	@# k3d caps memory but lets each node swap twice as much again. On WSL2
+	@# swapping goes to a VHDX on the Windows disk and stalls the host, so
+	@# a node that runs out should be OOM-killed instead.
+	for n in $$(k3d node list -o json | jq -r '.[] | select(.runtimeLabels["k3d.cluster"] == "$(K3D_CLUSTER)" and .role != "loadbalancer") | .name'); do \
+		docker update --memory-swap "$$(docker inspect -f '{{.HostConfig.Memory}}' $$n)" $$n >/dev/null; \
+	done
 
 .PHONY: cluster-down
 cluster-down: ## Delete the k3d cluster.
@@ -130,18 +136,12 @@ cluster-down: ## Delete the k3d cluster.
 .PHONY: image-local
 image-local: ## Build the manager on the host and package it into $(LOCAL_IMG).
 	mkdir -p bin/image
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -p $(GO_BUILD_PARALLELISM) -trimpath -o bin/image/manager cmd/main.go
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -p $(GO_BUILD_PARALLELISM) -trimpath -ldflags="-s -w" -o bin/image/manager cmd/main.go
 	$(CONTAINER_TOOL) build -q -t $(LOCAL_IMG) -f hack/manager.Dockerfile bin/image
 
 .PHONY: images-import
 images-import: image-local ## Import the operator and PostgreSQL images into the k3d nodes.
-	$(CONTAINER_TOOL) image inspect $(PG_IMAGE) >/dev/null 2>&1 || $(CONTAINER_TOOL) pull -q $(PG_IMAGE)
-	@# Export a single platform: with Docker's containerd image store a plain
-	@# save references layers of platforms that were never pulled, and the
-	@# import into the nodes fails with "content digest not found".
-	$(CONTAINER_TOOL) save --platform linux/amd64 -o bin/image/images.tar $(LOCAL_IMG) $(PG_IMAGE)
-	k3d image import -c $(K3D_CLUSTER) bin/image/images.tar
-	rm -f bin/image/images.tar
+	hack/import-images.sh $(K3D_CLUSTER) $(LOCAL_IMG) $(PG_IMAGE)
 
 .PHONY: deploy-local
 deploy-local: manifests kustomize images-import ## Deploy the operator into the k3d cluster.
