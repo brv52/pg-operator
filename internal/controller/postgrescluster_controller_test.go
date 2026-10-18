@@ -308,23 +308,70 @@ var _ = Describe("PostgresCluster controller", func() {
 		Expect(h.pod(h.inst(1))).To(BeNil(), "fencing deletes the failed primary")
 	})
 
-	It("refuses to promote without a quorum of standbys", func() {
+	It("keeps a failed primary when no standby could replace it", func() {
 		h.healthy()
+		epoch := h.cluster().Status.Epoch
 		h.fake.standby(h.inst(3), 300, false)
 		h.fake.down(h.inst(2))
 		h.kill(h.inst(1))
 
 		h.tick()
 		c := h.cluster()
-		Expect(c.Status.FailoverPhase).To(Equal(pgv1.PhasePromoting))
-		Expect(c.Status.TargetPrimary).To(BeEmpty())
+		Expect(c.Status.FailoverPhase).To(Equal(pgv1.PhaseDetecting), "fencing needs an electable successor")
+		Expect(c.Status.Epoch).To(Equal(epoch))
 		Expect(meta.FindStatusCondition(c.Status.Conditions, pgv1.ConditionFailover).Reason).To(Equal("NoQuorum"))
-		Expect(h.fake.promotedNames()).To(BeEmpty())
-		Expect(h.pod(h.inst(3)).Labels).To(HaveKeyWithValue(pgv1.LabelRole, pgv1.RoleReplica))
+		Expect(h.fake.fencedNames()).To(BeEmpty())
+		p := h.pod(h.inst(1))
+		Expect(p).NotTo(BeNil(), "the primary pod is recreated in place")
+		Expect(p.Labels).To(HaveKeyWithValue(pgv1.LabelRole, pgv1.RolePrimary))
+		Expect(h.env(p, "ROLE")).To(Equal(pgv1.RolePrimary))
+		Expect(h.env(p, "ALLOW_INITDB")).To(BeEmpty(), "a recreated primary must find its data, never create it")
 
-		h.fake.standby(h.inst(2), 280, false)
+		h.run(h.inst(1))
+		h.fake.primary(h.inst(1), 300, h.inst(3))
 		h.tick()
-		Expect(h.cluster().Status.CurrentPrimary).To(Equal(h.inst(3)))
+		c = h.cluster()
+		Expect(c.Status.FailoverPhase).To(Equal(pgv1.PhaseHealthy))
+		Expect(c.Status.CurrentPrimary).To(Equal(h.inst(1)))
+		Expect(h.fake.promotedNames()).To(BeEmpty())
+	})
+
+	It("waits for a quorum after fencing, then aborts and restores the old primary", func() {
+		h.healthy()
+		h.kill(h.inst(1))
+		h.fake.standby(h.inst(3), 300, false)
+		h.fake.down(h.inst(2))
+		c := h.cluster()
+		c.Status.FailoverPhase = pgv1.PhasePromoting
+		c.Status.FailoverReason = pgv1.ReasonPodMissing
+		c.Status.Epoch = 2
+		c.Status.FailoverStartTime = &metav1.Time{Time: h.clock}
+		Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
+
+		h.tick()
+		c = h.cluster()
+		Expect(c.Status.FailoverPhase).To(Equal(pgv1.PhasePromoting))
+		Expect(meta.FindStatusCondition(c.Status.Conditions, pgv1.ConditionFailover).Reason).To(Equal("NoQuorum"))
+		Expect(h.pod(h.inst(1))).To(BeNil(), "the old primary stays down while a successor may still appear")
+
+		h.clock = h.clock.Add(abortFailoverAfter)
+		h.tick()
+		c = h.cluster()
+		Expect(c.Status.FailoverPhase).To(Equal(pgv1.PhaseDetecting))
+		Expect(c.Status.CurrentPrimary).To(Equal(h.inst(1)))
+		Expect(c.Status.TargetPrimary).To(BeEmpty())
+		Expect(h.fake.promotedNames()).To(BeEmpty())
+		p := h.pod(h.inst(1))
+		Expect(p).NotTo(BeNil())
+		Expect(p.Labels).To(HaveKeyWithValue(pgv1.LabelRole, pgv1.RolePrimary))
+
+		h.run(h.inst(1))
+		h.fake.primary(h.inst(1), 300, h.inst(3))
+		h.tick()
+		c = h.cluster()
+		Expect(c.Status.FailoverPhase).To(Equal(pgv1.PhaseHealthy))
+		Expect(c.Status.CurrentPrimary).To(Equal(h.inst(1)))
+		Expect(c.Status.Epoch).To(Equal(int64(2)))
 	})
 
 	It("resumes a failover from the persisted phase after an operator restart", func() {

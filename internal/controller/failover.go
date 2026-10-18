@@ -38,6 +38,14 @@ import (
 // takes a few seconds; the pod's grace period is 30s.
 const switchoverShutdownTimeout = 45 * time.Second
 
+// abortFailoverAfter bounds how long a failover may wait in Promoting for
+// enough standbys to elect a successor. A failover only gets there when
+// one was electable at the moment of fencing; if the standbys then
+// disappear too (typically a whole-cluster restart), the old primary,
+// whose data is still on its volume and which has not been replaced, is
+// the best copy left and is brought back instead.
+const abortFailoverAfter = time.Minute
+
 // errWait means the current phase cannot make progress yet. It is not a
 // failure; the next round retries.
 var errWait = errors.New("waiting")
@@ -175,6 +183,21 @@ func (rc *round) detect(ctx context.Context) error {
 	if c.Spec.Instances == 1 {
 		// Nothing to fail over to; converge recreates the pod in place.
 		return nil
+	}
+	if err := rc.electable(); err != nil {
+		// Fencing now could only turn a slow or restarting primary into an
+		// outage that needs a human: nothing could be promoted in its
+		// place. Keep it, bring its pod back if it is gone, and keep
+		// watching; failover resumes as soon as a quorum of standbys is
+		// reachable again.
+		c.Status.FailoverPhase = pgv1.PhaseDetecting
+		c.Status.FailoverReason = reason
+		meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
+			Type: pgv1.ConditionFailover, Status: metav1.ConditionFalse, Reason: "NoQuorum",
+			Message: fmt.Sprintf("primary %s failed (%s) but no standby can replace it: %v", c.Status.CurrentPrimary, reason, err),
+		})
+		rc.log.Info("primary failed but no standby is electable, keeping it", "reason", reason, "error", err.Error())
+		return rc.recreatePrimaryInPlace(ctx)
 	}
 
 	// Enter Detecting even when this round is not counted, so evidence
@@ -336,16 +359,11 @@ func (rc *round) promote(ctx context.Context) error {
 		if err := rc.freezeStandbys(ctx, standbys); err != nil {
 			return err
 		}
-		var cands []pg.Candidate
-		for _, s := range standbys {
-			cands = append(cands, pg.Candidate{
-				Name: s.name, Ordinal: s.ordinal, Reachable: s.obs.Reachable && !s.terminating(),
-				InRecovery: s.obs.InRecovery, Timeline: s.obs.Timeline,
-				ReceiveLSN: s.obs.ReceiveLSN, ReplayLSN: s.obs.ReplayLSN,
-			})
-		}
-		winner, err := pg.Elect(cands, len(standbys), rc.syncNumber())
+		winner, err := pg.Elect(candidates(standbys), len(standbys), rc.syncNumber())
 		if err != nil {
+			if rc.r.now().Sub(c.Status.FailoverStartTime.Time) >= abortFailoverAfter {
+				return rc.abort(ctx, err)
+			}
 			meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
 				Type: pgv1.ConditionFailover, Status: metav1.ConditionTrue, Reason: "NoQuorum", Message: err.Error(),
 			})
@@ -375,6 +393,67 @@ func (rc *round) promote(ctx context.Context) error {
 	c.Status.CurrentPrimary = target.name
 	c.Status.FailoverPhase = pgv1.PhaseReconfiguring
 	return rc.persist(ctx)
+}
+
+func candidates(standbys []*instance) []pg.Candidate {
+	cands := make([]pg.Candidate, 0, len(standbys))
+	for _, s := range standbys {
+		cands = append(cands, pg.Candidate{
+			Name: s.name, Ordinal: s.ordinal, Reachable: s.obs.Reachable && !s.terminating(),
+			InRecovery: s.obs.InRecovery, Timeline: s.obs.Timeline,
+			ReceiveLSN: s.obs.ReceiveLSN, ReplayLSN: s.obs.ReplayLSN,
+		})
+	}
+	return cands
+}
+
+// electable reports whether an election could succeed with what this round
+// observed. It does not freeze anything; promote re-checks after freezing.
+func (rc *round) electable() error {
+	standbys := rc.set.others(rc.c.Status.CurrentPrimary)
+	_, err := pg.Elect(candidates(standbys), len(standbys), rc.syncNumber())
+	return err
+}
+
+// abort ends a failover that cannot elect a successor. It is only reached
+// with no TargetPrimary, so no standby has been promoted in this epoch and
+// the old primary is still the only instance that ever accepted writes on
+// the current timeline. Its pod is recreated as primary; standbys that were
+// frozen get their upstream back when the cluster converges.
+func (rc *round) abort(ctx context.Context, cause error) error {
+	c := rc.c
+	rc.log.Info("aborting failover, keeping the old primary", "primary", c.Status.CurrentPrimary, "error", cause.Error())
+	rc.r.event(c, corev1.EventTypeWarning, "FailoverAborted",
+		"no standby could replace %s within %s (%v); keeping it as primary", c.Status.CurrentPrimary, abortFailoverAfter, cause)
+	c.Status.FailoverPhase = pgv1.PhaseDetecting
+	c.Status.ProbeFailures = 0
+	c.Status.FailoverStartTime = nil
+	meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
+		Type: pgv1.ConditionFailover, Status: metav1.ConditionFalse, Reason: "Aborted", Message: cause.Error(),
+	})
+	if err := rc.persist(ctx); err != nil {
+		return err
+	}
+	if err := rc.writeLease(ctx, c.Status.CurrentPrimary, true); err != nil {
+		return err
+	}
+	return rc.recreatePrimaryInPlace(ctx)
+}
+
+// recreatePrimaryInPlace creates the current primary's pod on its existing
+// volume when the pod is gone. The init script starts an existing data
+// directory as is when the pod's role is primary.
+func (rc *round) recreatePrimaryInPlace(ctx context.Context) error {
+	c := rc.c
+	p := rc.set.get(c.Status.CurrentPrimary)
+	if p == nil || p.pod != nil {
+		return nil
+	}
+	if err := rc.ensurePVC(ctx, p); err != nil {
+		return err
+	}
+	rc.log.Info("recreating primary in place", "pod", p.name)
+	return client.IgnoreAlreadyExists(rc.r.Create(ctx, buildPod(c, p.name, pgv1.RolePrimary, p.name, c.Status.Epoch)))
 }
 
 // freezeTimeout bounds how long the election waits for WAL receivers to
