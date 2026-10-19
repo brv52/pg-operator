@@ -139,9 +139,15 @@ image-local: ## Build the manager on the host and package it into $(LOCAL_IMG).
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -p $(GO_BUILD_PARALLELISM) -trimpath -ldflags="-s -w" -o bin/image/manager cmd/main.go
 	$(CONTAINER_TOOL) build -q -t $(LOCAL_IMG) -f hack/manager.Dockerfile bin/image
 
+.PHONY: image-checker
+image-checker: ## Build the linearizability checker on the host and package it into pg-checker:dev.
+	mkdir -p bin/checker-image
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -p $(GO_BUILD_PARALLELISM) -trimpath -ldflags="-s -w" -o bin/checker-image/checker ./test/checker/cmd/checker
+	$(CONTAINER_TOOL) build -q -t pg-checker:dev -f hack/checker.Dockerfile bin/checker-image
+
 .PHONY: images-import
-images-import: image-local ## Import the operator and PostgreSQL images into the k3d nodes.
-	hack/import-images.sh $(K3D_CLUSTER) $(LOCAL_IMG) $(PG_IMAGE)
+images-import: image-local image-checker ## Import the operator, checker and PostgreSQL images into the k3d nodes.
+	hack/import-images.sh $(K3D_CLUSTER) $(LOCAL_IMG) pg-checker:dev $(PG_IMAGE)
 
 .PHONY: deploy-local
 deploy-local: manifests kustomize images-import ## Deploy the operator into the k3d cluster.
