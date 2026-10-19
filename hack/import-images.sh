@@ -1,5 +1,5 @@
 #!/bin/sh
-# Import local images into the k3d nodes, one image at a time.
+# Import local images into the k3d nodes, one image and one node at a time.
 #
 #   hack/import-images.sh CLUSTER IMAGE...
 #
@@ -14,8 +14,6 @@ cluster=$1
 shift
 nodes=$(k3d node list -o json | jq -r --arg c "$cluster" \
 	'.[] | select(.runtimeLabels["k3d.cluster"] == $c and (.role == "server" or .role == "agent")) | .name')
-dir=$(mktemp -d "${TMPDIR:-/tmp}/k3d-import.XXXXXX")
-trap 'rm -rf "$dir"' EXIT
 
 on_all_nodes() {
 	for n in $nodes; do
@@ -38,10 +36,13 @@ for image in "$@"; do
 		;;
 	esac
 	docker image inspect "$image" >/dev/null 2>&1 || docker pull -q "$image"
-	# A single platform: with Docker's containerd image store a plain save
-	# references layers of platforms that were never pulled, and the
-	# import fails with "content digest not found".
-	docker save --platform linux/amd64 -o "$dir/image.tar" "$image"
-	k3d image import -c "$cluster" "$dir/image.tar"
-	rm -f "$dir/image.tar"
+	# Stream straight into each node's containerd: no tarball on disk and
+	# no k3d tools container. A single platform: with Docker's containerd
+	# image store a plain save references layers of platforms that were
+	# never pulled, and the import fails with "content digest not found".
+	for n in $nodes; do
+		echo "import $image into $n"
+		docker save --platform linux/amd64 "$image" |
+			docker exec -i "$n" ctr -n k8s.io images import --all-platforms=false - >/dev/null
+	done
 done
