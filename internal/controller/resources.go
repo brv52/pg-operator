@@ -67,6 +67,9 @@ func objectMeta(c *pgv1.PostgresCluster, name string, extra map[string]string) m
 // instanceHost is the stable DNS name of an instance through the headless
 // Service. Replication connections use it rather than the -rw Service so a
 // standby's upstream is always an explicit, operator-chosen instance.
+// containerPostgres is the name of the container that runs postgres.
+const containerPostgres = "postgres"
+
 func instanceHost(c *pgv1.PostgresCluster, instance string) string {
 	return fmt.Sprintf("%s.%s.%s.svc", instance, c.HeadlessServiceName(), c.Namespace)
 }
@@ -282,7 +285,7 @@ func buildPod(c *pgv1.PostgresCluster, name, role, primaryInstance string, epoch
 				Resources:       c.Spec.Resources,
 			}},
 			Containers: []corev1.Container{{
-				Name:            "postgres",
+				Name:            containerPostgres,
 				Image:           c.Spec.PostgresImage,
 				Command:         []string{"sh", "/scripts/instance.sh", "run"},
 				Env:             env,

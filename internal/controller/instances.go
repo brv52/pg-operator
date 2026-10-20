@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -70,6 +71,21 @@ func (i *instance) podReady() bool {
 
 // healthyStandby reports whether the instance is a reachable standby whose
 // WAL receiver is connected and recently heard from its upstream.
+// incarnation identifies the running postgres process well enough to tell
+// whether it has restarted: a new pod or a container restart (a crash, or
+// the node coming back) changes it.
+func (i *instance) incarnation() string {
+	if i.pod == nil {
+		return ""
+	}
+	for _, cs := range i.pod.Status.ContainerStatuses {
+		if cs.Name == containerPostgres {
+			return fmt.Sprintf("%s/%d", i.pod.UID, cs.RestartCount)
+		}
+	}
+	return string(i.pod.UID)
+}
+
 func (i *instance) healthyStandby() bool {
 	return i.obs.Reachable && i.obs.InRecovery && i.obs.Streaming &&
 		(i.obs.LastMsgAge < 0 || i.obs.LastMsgAge <= pg.WalReceiverTimeout)

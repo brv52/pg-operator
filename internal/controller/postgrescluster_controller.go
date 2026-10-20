@@ -73,6 +73,10 @@ type PostgresClusterReconciler struct {
 	// offTimeline records when each standby was first seen stuck on an
 	// older timeline (see recreateDivergedStandbys).
 	offTimeline map[string]time.Time
+	// streamed records, per standby, the incarnations of the standby and
+	// of the primary when this process last saw the standby streaming
+	// (see isolatedFromStandbys).
+	streamed map[string]string
 }
 
 // +kubebuilder:rbac:groups=pg.platform.local,resources=postgresclusters,verbs=get;list;watch;create;update;patch;delete

@@ -121,17 +121,17 @@ func (rc *round) primaryFailure() (failed, immediate bool, reason string) {
 //   - enough standbys to form an election quorum are reachable, and every
 //     one of them reports its WAL receiver down or silent for longer than
 //     wal_receiver_timeout, and
-//   - each of them was streaming in the previous recorded status, so a
-//     standby that is still being cloned or has never connected does not
-//     look like evidence against the primary.
+//   - this operator process has seen each of them streaming from the
+//     primary, and neither the standby nor the primary has restarted since.
+//     A standby that is still being cloned or has never connected is no
+//     evidence against the primary, and neither is one that was streaming
+//     before a restart: after a whole-cluster restart the primary is up
+//     before its standbys reconnect, and status written before the restart
+//     would make that look like a partition.
 func (rc *round) isolatedFromStandbys(p *instance) bool {
 	c := rc.c
 	if len(p.obs.StreamingReplicas(pg.WalSenderTimeout)) > 0 {
 		return false
-	}
-	prev := map[string]pgv1.InstanceStatus{}
-	for _, s := range c.Status.Instances {
-		prev[s.Name] = s
 	}
 	inDetection := c.Status.FailoverPhase == pgv1.PhaseDetecting &&
 		c.Status.FailoverReason == pgv1.ReasonIsolatedFromReplicas
@@ -145,7 +145,7 @@ func (rc *round) isolatedFromStandbys(p *instance) bool {
 		if s.healthyStandby() {
 			return false
 		}
-		if !inDetection && !prev[s.name].Streaming {
+		if !inDetection && !rc.r.sawStreaming(rc.streamKey(s), s, p) {
 			continue
 		}
 		witnesses++
@@ -160,9 +160,43 @@ func (rc *round) syncNumber() int {
 	return 0
 }
 
+func (rc *round) streamKey(s *instance) string {
+	return rc.c.Namespace + "/" + s.name
+}
+
+// recordStreaming remembers which standbys are streaming from the current
+// primary, together with the incarnations of both.
+func (rc *round) recordStreaming() {
+	p := rc.set.get(rc.c.Status.CurrentPrimary)
+	if p == nil || p.pod == nil {
+		return
+	}
+	for _, s := range rc.set.others(p.name) {
+		if s.healthyStandby() {
+			rc.r.markStreamed(rc.streamKey(s), s, p)
+		}
+	}
+}
+
+func (r *PostgresClusterReconciler) markStreamed(key string, s, p *instance) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.streamed == nil {
+		r.streamed = map[string]string{}
+	}
+	r.streamed[key] = s.incarnation() + "|" + p.incarnation()
+}
+
+func (r *PostgresClusterReconciler) sawStreaming(key string, s, p *instance) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.streamed[key] == s.incarnation()+"|"+p.incarnation()
+}
+
 // detect implements Healthy and Detecting.
 func (rc *round) detect(ctx context.Context) error {
 	c := rc.c
+	rc.recordStreaming()
 	failed, immediate, reason := rc.primaryFailure()
 
 	if !failed {
@@ -336,15 +370,35 @@ func (rc *round) promote(ctx context.Context) error {
 
 	if c.Status.TargetPrimary != "" {
 		t := rc.set.get(c.Status.TargetPrimary)
-		if t == nil || t.pod == nil || t.terminating() {
-			// The chosen standby died before it was promoted. It never
-			// left recovery (Promoting would have moved on), so electing
-			// again among the rest is safe.
-			rc.log.Info("promotion target lost, re-electing", "target", c.Status.TargetPrimary)
+		stuck := t != nil && t.pod != nil && !t.obs.Reachable &&
+			rc.r.now().Sub(c.Status.FailoverStartTime.Time) >= abortFailoverAfter
+		if t == nil || t.pod == nil || t.terminating() || stuck {
+			// The chosen standby died, or has stayed unreachable, before
+			// Promoting finished. A standby that restarts while no primary
+			// is running never accepts connections again (hot standby
+			// needs a running-transactions record only a primary writes),
+			// so waiting for it can block the failover for good. Electing
+			// again is safe even if pg_promote did run on it: its role
+			// label only becomes primary after the promotion succeeds, so
+			// no client reached it through the -rw Service, and when its
+			// container restarts it boots as a standby (the self-fence in
+			// instance.sh) and is rewound onto the new timeline.
+			rc.log.Info("promotion target lost, re-electing", "target", c.Status.TargetPrimary, "unreachable", stuck)
+			if stuck {
+				// It may be running as a primary that only the operator
+				// cannot reach. Remove it so the instance can only come
+				// back as a standby.
+				err := rc.r.Delete(ctx, t.pod, client.Preconditions{UID: &t.pod.UID})
+				if client.IgnoreNotFound(err) != nil && !apierrors.IsConflict(err) {
+					return err
+				}
+			}
 			c.Status.TargetPrimary = ""
 			if err := rc.persist(ctx); err != nil {
 				return err
 			}
+		} else if !t.obs.Reachable {
+			return errWait
 		}
 	}
 

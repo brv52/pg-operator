@@ -116,6 +116,22 @@ func (h *harness) run(name string) {
 	Expect(k8sClient.Status().Update(ctx, p)).To(Succeed())
 }
 
+// restart plays a container restart of postgres in the pod, as after a
+// crash or the node coming back.
+func (h *harness) restart(name string) {
+	GinkgoHelper()
+	p := h.pod(name)
+	Expect(p).NotTo(BeNil())
+	var n int32
+	if len(p.Status.ContainerStatuses) > 0 {
+		n = p.Status.ContainerStatuses[0].RestartCount + 1
+	}
+	p.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: containerPostgres, Image: "postgres", ImageID: "postgres", Ready: true, RestartCount: n,
+	}}
+	Expect(k8sClient.Status().Update(ctx, p)).To(Succeed())
+}
+
 func (h *harness) kill(name string) {
 	GinkgoHelper()
 	p := h.pod(name)
@@ -435,6 +451,80 @@ var _ = Describe("PostgresCluster controller", func() {
 		Expect(c.Status.CurrentPrimary).To(Equal(h.inst(3)))
 		Expect(h.fake.fencedNames()).To(Equal([]string{h.inst(1)}), "the reachable old primary is SQL-fenced")
 		Expect(h.pod(h.inst(1))).To(BeNil())
+	})
+
+	It("does not mistake a whole-cluster restart for a partition", func() {
+		h.healthy()
+		// Every pod restarted. The primary is back first and its standbys
+		// have not reconnected yet, exactly what a partition looks like
+		// to the primary.
+		for n := 1; n <= 3; n++ {
+			h.restart(h.inst(n))
+		}
+		h.fake.primary(h.inst(1), 400)
+		h.fake.standby(h.inst(2), 380, false)
+		h.fake.standby(h.inst(3), 390, false)
+		for range 4 {
+			h.tick()
+		}
+		c := h.cluster()
+		Expect(c.Status.FailoverPhase).To(Equal(pgv1.PhaseHealthy))
+		Expect(c.Status.CurrentPrimary).To(Equal(h.inst(1)))
+		Expect(h.fake.fencedNames()).To(BeEmpty())
+
+		// The same holds for an operator that restarted along with them:
+		// it has seen nothing streaming yet.
+		h.r = &PostgresClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), PG: h.fake,
+			Now: func() time.Time { return h.clock }}
+		for range 4 {
+			h.tick()
+		}
+		Expect(h.cluster().Status.FailoverPhase).To(Equal(pgv1.PhaseHealthy))
+
+		// Once the standbys have streamed again, losing them is evidence.
+		h.fake.primary(h.inst(1), 400, h.inst(2), h.inst(3))
+		h.fake.standby(h.inst(2), 400, true)
+		h.fake.standby(h.inst(3), 400, true)
+		h.tick()
+		h.fake.primary(h.inst(1), 450)
+		h.fake.standby(h.inst(2), 420, false)
+		h.fake.standby(h.inst(3), 430, false)
+		for range 3 {
+			h.tick()
+		}
+		Expect(h.cluster().Status.CurrentPrimary).To(Equal(h.inst(3)))
+	})
+
+	It("re-elects when the promotion target stays unreachable", func() {
+		h.healthy()
+		h.kill(h.inst(1))
+		h.fake.standby(h.inst(3), 400, false)
+		h.fake.down(h.inst(2))
+		c := h.cluster()
+		c.Status.FailoverPhase = pgv1.PhasePromoting
+		c.Status.FailoverReason = pgv1.ReasonPodMissing
+		c.Status.TargetPrimary = h.inst(2)
+		c.Status.Epoch = 2
+		c.Status.FailoverStartTime = &metav1.Time{Time: h.clock}
+		Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
+
+		h.tick()
+		c = h.cluster()
+		Expect(c.Status.TargetPrimary).To(Equal(h.inst(2)), "a briefly unreachable target is waited for")
+		Expect(h.fake.promotedNames()).To(BeEmpty())
+
+		h.clock = h.clock.Add(abortFailoverAfter)
+		h.tick()
+		c = h.cluster()
+		Expect(h.pod(h.inst(2))).To(BeNil(), "the abandoned target is removed so it can only rejoin as a standby")
+		Expect(c.Status.TargetPrimary).To(BeEmpty())
+		Expect(h.fake.promotedNames()).To(BeEmpty())
+		// db-3 alone is no quorum, so the failover is aborted and the old
+		// primary comes back on its volume.
+		Expect(c.Status.CurrentPrimary).To(Equal(h.inst(1)))
+		p := h.pod(h.inst(1))
+		Expect(p).NotTo(BeNil())
+		Expect(p.Labels).To(HaveKeyWithValue(pgv1.LabelRole, pgv1.RolePrimary))
 	})
 
 	It("does not mistake replicas that never streamed for a partition", func() {
