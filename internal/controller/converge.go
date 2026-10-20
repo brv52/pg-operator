@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -136,31 +137,86 @@ func (rc *round) convergeSQL(ctx context.Context, p *instance) error {
 // and follows the timeline switch, which takes a second or two.
 const divergedAfter = 30 * time.Second
 
-// recreateDivergedStandbys deletes standbys that have been on an older
-// timeline than the primary, without streaming, for longer than
-// divergedAfter. That is the signature of an instance that cannot follow
-// the timeline switch, typically a former primary whose container
-// restarted in place (the self-fence kept it out of service but it still
-// carries diverged WAL). The recreated pod goes through pg_rewind.
+// stuckAfter is how long a standby whose postgres is running may stay
+// unreachable, or reachable but not streaming, on the primary's timeline
+// before it is recreated. It is longer than divergedAfter because crash
+// recovery of a large standby legitimately keeps it unreachable for a while.
+const stuckAfter = 2 * time.Minute
+
+// recreateDivergedStandbys deletes standbys that cannot follow the primary:
+//
+//   - on an older timeline than the primary, without streaming, for longer
+//     than divergedAfter. That is the signature of an instance that cannot
+//     follow the timeline switch, typically a former primary whose
+//     container restarted in place (the self-fence kept it out of service
+//     but it still carries diverged WAL).
+//   - running but unreachable or not streaming for longer than stuckAfter.
+//     A standby can hold WAL the primary does not have at the same LSNs on
+//     the same timeline, when the primary lost the tail of its WAL in a
+//     crash after streaming it. Recovery then stops at the first record
+//     that differs and never becomes consistent, and pg_rewind, which
+//     compares positions rather than contents, reports nothing to do.
+//
+// Each recreation is counted on the PVC. The first one rejoins through
+// pg_rewind; from the second on the pod is created with RECLONE and init
+// sets the data directory aside and clones it fresh. The count is cleared
+// once the standby streams again.
 func (rc *round) recreateDivergedStandbys(ctx context.Context, p *instance) error {
 	now := rc.r.now()
 	for _, s := range rc.set.others(p.name) {
 		key := client.ObjectKeyFromObject(rc.c).String() + "/" + s.name
+		if s.healthyStandby() && s.rejoinAttempts() > 0 {
+			if err := rc.setRejoinAttempts(ctx, s, 0); err != nil {
+				return err
+			}
+		}
 		lagging := s.obs.Reachable && s.obs.InRecovery && !s.obs.Streaming && !s.terminating() &&
 			s.obs.Timeline < p.obs.Timeline
-		since, seen := rc.r.offTimelineSince(key, lagging, now)
-		if !lagging || !seen || now.Sub(since) < divergedAfter {
+		stuck := s.postgresRunning() && !s.terminating() &&
+			(!s.obs.Reachable || s.obs.InRecovery && !s.obs.Streaming)
+		window := stuckAfter
+		if lagging {
+			window = divergedAfter
+		}
+		cannotFollow := lagging || stuck
+		since, seen := rc.r.offTimelineSince(key, cannotFollow, now)
+		if !cannotFollow || !seen || now.Sub(since) < window {
 			continue
 		}
-		rc.log.Info("standby cannot follow the primary timeline, recreating it", "instance", s.name,
-			"timeline", s.obs.Timeline, "primaryTimeline", p.obs.Timeline, "since", since)
-		rc.r.event(rc.c, corev1.EventTypeWarning, "StandbyDiverged", "recreating %s to rewind it", s.name)
+		attempts := s.rejoinAttempts() + 1
+		how := "rewind"
+		if attempts > 1 {
+			how = "reclone"
+		}
+		rc.log.Info("standby cannot follow the primary, recreating it", "instance", s.name,
+			"reachable", s.obs.Reachable, "timeline", s.obs.Timeline, "primaryTimeline", p.obs.Timeline,
+			"since", since, "attempt", attempts, "rejoin", how)
+		rc.r.event(rc.c, corev1.EventTypeWarning, "StandbyDiverged", "recreating %s to %s it (attempt %d)", s.name, how, attempts)
+		if err := rc.setRejoinAttempts(ctx, s, attempts); err != nil {
+			return err
+		}
 		if err := rc.r.Delete(ctx, s.pod, client.Preconditions{UID: &s.pod.UID}); client.IgnoreNotFound(err) != nil {
 			return err
 		}
 		rc.r.offTimelineSince(key, false, now)
 	}
 	return nil
+}
+
+func (rc *round) setRejoinAttempts(ctx context.Context, s *instance, n int) error {
+	if s.pvc == nil {
+		return nil
+	}
+	patch := client.MergeFrom(s.pvc.DeepCopy())
+	if n == 0 {
+		delete(s.pvc.Annotations, pgv1.AnnotationRejoinAttempts)
+	} else {
+		if s.pvc.Annotations == nil {
+			s.pvc.Annotations = map[string]string{}
+		}
+		s.pvc.Annotations[pgv1.AnnotationRejoinAttempts] = strconv.Itoa(n)
+	}
+	return client.IgnoreNotFound(rc.r.Patch(ctx, s.pvc, patch))
 }
 
 // offTimelineSince tracks, in memory, when a standby was first seen lagging
@@ -206,6 +262,10 @@ func (rc *round) convergePods(ctx context.Context, p *instance) error {
 		}
 		rc.log.Info("creating replica", "pod", i.name, "upstream", p.name)
 		pod := buildPod(c, i.name, pgv1.RoleReplica, p.name, c.Status.Epoch)
+		if i.rejoinAttempts() > 1 {
+			boot := &pod.Spec.InitContainers[0]
+			boot.Env = append(boot.Env, corev1.EnvVar{Name: "RECLONE", Value: "true"})
+		}
 		if err := rc.r.Create(ctx, pod); client.IgnoreAlreadyExists(err) != nil {
 			return err
 		}

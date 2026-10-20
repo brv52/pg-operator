@@ -35,6 +35,12 @@ const (
 	// promoted in. A pod whose epoch is behind the cluster epoch can never
 	// be routed to as a primary.
 	AnnotationEpoch = "pg.platform.local/epoch"
+
+	// AnnotationRejoinAttempts on an instance's PVC counts how often in a
+	// row the operator recreated that standby because it could not follow
+	// the primary. From the second attempt on the instance is recloned
+	// instead of rewound.
+	AnnotationRejoinAttempts = "pg.platform.local/rejoin-attempts"
 )
 
 // Role values for LabelRole.

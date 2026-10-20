@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -44,6 +45,30 @@ func (i *instance) role() string {
 		return ""
 	}
 	return i.pod.Labels[pgv1.LabelRole]
+}
+
+// postgresRunning reports whether the postgres container has started, as
+// opposed to the pod still running its init container.
+func (i *instance) postgresRunning() bool {
+	if i.pod == nil {
+		return false
+	}
+	for _, cs := range i.pod.Status.ContainerStatuses {
+		if cs.Name == containerPostgres {
+			return cs.State.Running != nil
+		}
+	}
+	return false
+}
+
+// rejoinAttempts is the number of consecutive recreations recorded on the
+// instance's PVC.
+func (i *instance) rejoinAttempts() int {
+	if i.pvc == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(i.pvc.Annotations[pgv1.AnnotationRejoinAttempts])
+	return n
 }
 
 func (i *instance) terminating() bool {

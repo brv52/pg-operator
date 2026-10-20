@@ -128,6 +128,7 @@ func (h *harness) restart(name string) {
 	}
 	p.Status.ContainerStatuses = []corev1.ContainerStatus{{
 		Name: containerPostgres, Image: "postgres", ImageID: "postgres", Ready: true, RestartCount: n,
+		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
 	}}
 	Expect(k8sClient.Status().Update(ctx, p)).To(Succeed())
 }
@@ -525,6 +526,46 @@ var _ = Describe("PostgresCluster controller", func() {
 		p := h.pod(h.inst(1))
 		Expect(p).NotTo(BeNil())
 		Expect(p.Labels).To(HaveKeyWithValue(pgv1.LabelRole, pgv1.RolePrimary))
+	})
+
+	It("recreates a standby that cannot follow, first to rewind and then to reclone", func() {
+		h.healthy()
+		attempts := func() string {
+			var pvc corev1.PersistentVolumeClaim
+			Expect(k8sClient.Get(ctx, h.key(h.inst(2)), &pvc)).To(Succeed())
+			return pvc.Annotations[pgv1.AnnotationRejoinAttempts]
+		}
+		// postgres runs in db-2 but never becomes reachable: recovery
+		// stopped at WAL the primary does not have.
+		stall := func() {
+			GinkgoHelper()
+			h.restart(h.inst(2))
+			h.fake.down(h.inst(2))
+			h.tick()
+			h.clock = h.clock.Add(stuckAfter)
+			h.tick()
+		}
+
+		stall()
+		Expect(h.pod(h.inst(2))).To(BeNil())
+		Expect(attempts()).To(Equal("1"))
+		Expect(h.fake.promotedNames()).To(BeEmpty())
+		h.tick()
+		p := h.pod(h.inst(2))
+		Expect(p).NotTo(BeNil())
+		Expect(h.env(p, "RECLONE")).To(BeEmpty(), "the first attempt rejoins through pg_rewind")
+
+		h.run(h.inst(2))
+		stall()
+		Expect(h.pod(h.inst(2))).To(BeNil())
+		Expect(attempts()).To(Equal("2"))
+		h.tick()
+		Expect(h.env(h.pod(h.inst(2)), "RECLONE")).To(Equal("true"))
+
+		h.run(h.inst(2))
+		h.fake.standby(h.inst(2), 100, true)
+		h.tick()
+		Expect(attempts()).To(BeEmpty(), "streaming again resets the count")
 	})
 
 	It("does not mistake replicas that never streamed for a partition", func() {

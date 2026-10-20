@@ -367,6 +367,22 @@ func TestRestartWithoutPrimary(t *testing.T) {
 	p1 = h.start("pg1", "primary", "")
 	h.eventually("standby streaming again", func() bool { return len(observe(p1).StreamingReplicas(10*time.Second)) == 1 })
 
+	// A standby recreated with RECLONE clones fresh, once per pod: the same
+	// pod restarting (a node reboot runs init again) keeps its new copy.
+	h.docker("rm", "-f", h.prefix+"-pg2")
+	c2 := h.run("pg2", "replica", "pg1", "RECLONE=true", "POD_UID=uid-1")
+	p2 = Target{Name: "pg2", Host: h.docker("inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", c2), Password: superPW}
+	h.waitReady(p2)
+	h.eventually("recloned standby caught up", func() bool { return observe(p2).Streaming })
+	if got := h.count(p2, "true"); got != 100 {
+		t.Fatalf("recloned standby has %d rows, want 100", got)
+	}
+	h.docker("restart", c2)
+	h.waitReady(p2)
+	if n := strings.Count(h.docker("logs", c2), "reclone requested"); n != 1 {
+		t.Fatalf("standby recloned %d times, want once per pod", n)
+	}
+
 	// A primary pod on an empty volume that is not the cluster's first
 	// bootstrap must not create a fresh database.
 	c := h.run("pg3", "primary", "")

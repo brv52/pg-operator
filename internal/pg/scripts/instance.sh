@@ -16,6 +16,9 @@
 #   POD_NAME            instance name, also the replication application_name
 #   ROLE                primary | replica
 #   ALLOW_INITDB        "true" only on the pod that bootstraps a new cluster
+#   RECLONE             "true" when a rewind already failed to make this
+#                       standby follow; clone instead of rewinding, once
+#                       per pod (POD_UID)
 #   RW_HOST             the cluster's -rw Service, preferred clone/rewind source
 #   PRIMARY_HOST        the primary when the pod was created, fallback source
 #   PGDATA              data directory on the volume
@@ -130,6 +133,13 @@ rewind() {
 		--progress
 }
 
+# set_aside keeps the current data directory as the single newest
+# $PGDATA.failed.<time> copy, for forensics, and leaves PGDATA empty.
+set_aside() {
+	find "$VOLUME" -maxdepth 1 -name "$(basename "$PGDATA").failed.*" -exec rm -rf {} + || true
+	mv "$PGDATA" "$PGDATA.failed.$(date +%s)"
+}
+
 cmd_init() {
 	mkdir -p "$PGDATA"
 	chmod 700 "$PGDATA"
@@ -174,14 +184,22 @@ cmd_init() {
 		return
 	fi
 
-	if ! rewind "$source"; then
+	if [ "${RECLONE:-}" = true ] && [ "$(cat "$VOLUME/.recloned" 2>/dev/null)" != "${POD_UID:-}" ]; then
+		# The operator already recreated this standby once and it still
+		# could not follow, typically because it holds WAL the primary
+		# lost at the same positions. pg_rewind cannot see that.
+		log "reclone requested, setting the data directory aside"
+		set_aside
+		clone "$source"
+		# Init runs again after a node restart; clone only once per pod.
+		echo "${POD_UID:-}" >"$VOLUME/.recloned"
+	elif ! rewind "$source"; then
 		# The source is a reachable primary and rewind still failed: the
 		# WAL needed to rewind is gone (recycled beyond wal_keep_size and
 		# slot retention) or the data directory is damaged. A full clone
 		# always works. Keep the newest failed copy for forensics only.
 		log "pg_rewind against a reachable primary failed, falling back to a full clone"
-		find "$VOLUME" -maxdepth 1 -name "$(basename "$PGDATA").failed.*" -exec rm -rf {} + || true
-		mv "$PGDATA" "$PGDATA.failed.$(date +%s)"
+		set_aside
 		clone "$source"
 	fi
 	configure_standby "$source"

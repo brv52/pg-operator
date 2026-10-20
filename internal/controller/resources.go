@@ -224,6 +224,7 @@ func buildPod(c *pgv1.PostgresCluster, name, role, primaryInstance string, epoch
 	}
 	env := []corev1.EnvVar{
 		{Name: "POD_NAME", Value: name},
+		{Name: "POD_UID", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}},
 		{Name: "ROLE", Value: scriptRole},
 		{Name: "PRIMARY_HOST", Value: instanceHost(c, primaryInstance)},
 		{Name: "RW_HOST", Value: fmt.Sprintf("%s.%s.svc", c.ReadWriteServiceName(), c.Namespace)},
