@@ -151,8 +151,12 @@ images-import: image-local image-checker ## Import the operator, checker and Pos
 
 .PHONY: deploy-local
 deploy-local: manifests kustomize images-import ## Deploy the operator into the k3d cluster.
+	@# Render with the local image without leaving the edit in the tree.
+	cp config/manager/kustomization.yaml bin/kustomization.yaml.orig
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=$(LOCAL_IMG)
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply --server-side --force-conflicts -f -
+	"$(KUSTOMIZE)" build config/default > bin/deploy-local.yaml; \
+		rc=$$?; mv bin/kustomization.yaml.orig config/manager/kustomization.yaml; exit $$rc
+	"$(KUBECTL)" apply --server-side --force-conflicts -f bin/deploy-local.yaml
 	"$(KUBECTL)" -n pg-operator-system rollout restart deploy/pg-operator-controller-manager
 	"$(KUBECTL)" -n pg-operator-system rollout status deploy/pg-operator-controller-manager --timeout=180s
 
