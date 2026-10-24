@@ -109,6 +109,10 @@ cluster-up: ## Create the 3-node k3d cluster from hack/k3d-config.yaml.
 cluster-down: ## Delete the k3d cluster.
 	k3d cluster delete $(K3D_CLUSTER)
 
+.PHONY: metrics
+metrics: ## Aggregate bench/results into metrics.json.
+	go run ./bench/aggregate -results bench/results -out metrics.json
+
 CHAOS_MESH_VERSION ?= 2.8.5
 
 .PHONY: chaos-install
