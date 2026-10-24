@@ -1,0 +1,23 @@
+# Chaos Mesh for the k3d development cluster (make chaos-install).
+#
+# Only what the experiments use: the controller and the per-node daemon.
+# The dashboard and the DNS server are off, and everything is capped so
+# the whole installation fits next to two PostgreSQL clusters on a laptop.
+controllerManager:
+  replicaCount: 1
+  leaderElection:
+    enabled: false
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {memory: 192Mi}
+chaosDaemon:
+  # k3s runs its own containerd with the socket under /run/k3s.
+  runtime: containerd
+  socketPath: /run/k3s/containerd/containerd.sock
+  resources:
+    requests: {cpu: 25m, memory: 48Mi}
+    limits: {memory: 160Mi}
+dashboard:
+  create: false
+dnsServer:
+  create: false

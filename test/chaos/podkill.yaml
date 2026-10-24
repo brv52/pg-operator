@@ -1,0 +1,22 @@
+# Kill the current primary of one cluster, immediately (no graceful
+# shutdown). bench/run_scenario.sh fills in the placeholders with
+# envsubst: NAMESPACE, CLUSTER, RUN_ID.
+#
+# The role label is what the operator keeps on the primary pod, so the
+# selector follows failovers: each run kills whoever is primary now.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: podkill-${RUN_ID}
+  namespace: ${NAMESPACE}
+  labels:
+    pg.platform.local/run: "${RUN_ID}"
+spec:
+  action: pod-kill
+  mode: one
+  gracePeriod: 0
+  selector:
+    namespaces: ["${NAMESPACE}"]
+    labelSelectors:
+      pg.platform.local/cluster: "${CLUSTER}"
+      pg.platform.local/role: primary

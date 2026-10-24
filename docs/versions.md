@@ -67,9 +67,15 @@ Checked on `5.15.167.4-microsoft-standard-WSL2`:
 
 | Option | State | Impact |
 |---|---|---|
-| `CONFIG_IP_SET` | `y` | Required by `NetworkChaos` `partition` (ipset + iptables). OK. |
-| `CONFIG_NETFILTER_XT_SET` | `y` | Same. OK. |
+| `CONFIG_IP_SET` | `y` | Used by `NetworkChaos` `partition`. |
+| `CONFIG_IP_SET_LIST_SET` | not set | `NetworkChaos` `partition` always creates a `list:set` ipset and fails with "set type not supported", so the experiment never injects. On WSL2 the partition is injected by `test/chaos/partition.sh` (blackhole routes in the primary's network namespace) instead; `test/chaos/partition.yaml` is for kernels that have it. |
 | `CONFIG_NET_SCH_NETEM` | not set | `NetworkChaos` `delay`/`loss`/`corrupt` will fail. Not used by the benchmark scenarios; required only for optional latency experiments (custom WSL kernel). |
+
+Custom iptables chains inside a pod's network namespace are avoided on
+purpose: a run with an iptables-based injector ended with the whole WSL2
+VM dying, most likely when the partitioned primary was fenced and its
+namespace torn down with the chain still in place (no kernel log survived
+to confirm it). Routes go away with the namespace.
 
 ## Kubernetes behaviour that affects the results
 

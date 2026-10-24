@@ -1,0 +1,59 @@
+# Partition the current primary from its standbys and from the client,
+# in both directions, for DURATION. The operator, running in another
+# namespace, can still reach the primary: this is the failure the SQL
+# probe alone cannot see, and that the standby-side detection
+# (isolatedFromStandbys) is there for. bench/run_scenario.sh fills in the
+# placeholders with envsubst: NAMESPACE, CLUSTER, RUN_ID, DURATION.
+#
+# A selector is a conjunction of labels, so the two peer groups need one
+# NetworkChaos each. Writes the client manages to start on the isolated
+# primary block on synchronous replication and must never be
+# acknowledged; the checker verifies none of them are lost or phantom.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: partition-standbys-${RUN_ID}
+  namespace: ${NAMESPACE}
+  labels:
+    pg.platform.local/run: "${RUN_ID}"
+spec:
+  action: partition
+  mode: all
+  direction: both
+  duration: "${DURATION}"
+  selector:
+    namespaces: ["${NAMESPACE}"]
+    labelSelectors:
+      pg.platform.local/cluster: "${CLUSTER}"
+      pg.platform.local/role: primary
+  target:
+    mode: all
+    selector:
+      namespaces: ["${NAMESPACE}"]
+      labelSelectors:
+        pg.platform.local/cluster: "${CLUSTER}"
+        pg.platform.local/role: replica
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: partition-client-${RUN_ID}
+  namespace: ${NAMESPACE}
+  labels:
+    pg.platform.local/run: "${RUN_ID}"
+spec:
+  action: partition
+  mode: all
+  direction: both
+  duration: "${DURATION}"
+  selector:
+    namespaces: ["${NAMESPACE}"]
+    labelSelectors:
+      pg.platform.local/cluster: "${CLUSTER}"
+      pg.platform.local/role: primary
+  target:
+    mode: all
+    selector:
+      namespaces: ["${NAMESPACE}"]
+      labelSelectors:
+        app.kubernetes.io/name: pg-checker

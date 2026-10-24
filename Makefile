@@ -109,6 +109,18 @@ cluster-up: ## Create the 3-node k3d cluster from hack/k3d-config.yaml.
 cluster-down: ## Delete the k3d cluster.
 	k3d cluster delete $(K3D_CLUSTER)
 
+CHAOS_MESH_VERSION ?= 2.8.5
+
+.PHONY: chaos-install
+chaos-install: ## Install Chaos Mesh into the k3d cluster for the fault experiments.
+	helm repo add chaos-mesh https://charts.chaos-mesh.org --force-update >/dev/null
+	helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh --version $(CHAOS_MESH_VERSION) \
+		--namespace chaos-mesh --create-namespace -f test/chaos/chaos-mesh-values.yaml --wait --timeout 5m
+
+.PHONY: chaos-uninstall
+chaos-uninstall: ## Remove Chaos Mesh from the k3d cluster.
+	helm uninstall chaos-mesh --namespace chaos-mesh --wait
+
 .PHONY: image-local
 image-local: ## Build the manager on the host and package it into $(LOCAL_IMG).
 	mkdir -p bin/image
