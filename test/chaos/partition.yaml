@@ -3,7 +3,8 @@
 # namespace, can still reach the primary: this is the failure the SQL
 # probe alone cannot see, and that the standby-side detection
 # (isolatedFromStandbys) is there for. bench/run_scenario.sh fills in the
-# placeholders with envsubst: NAMESPACE, CLUSTER, RUN_ID, DURATION.
+# placeholders with envsubst: NAMESPACE, RUN_ID, DURATION and the label
+# flow maps PRIMARY_LABELS and REPLICA_LABELS (see podkill.yaml).
 #
 # A selector is a conjunction of labels, so the two peer groups need one
 # NetworkChaos each. Writes the client manages to start on the isolated
@@ -23,16 +24,12 @@ spec:
   duration: "${DURATION}"
   selector:
     namespaces: ["${NAMESPACE}"]
-    labelSelectors:
-      pg.platform.local/cluster: "${CLUSTER}"
-      pg.platform.local/role: primary
+    labelSelectors: ${PRIMARY_LABELS}
   target:
     mode: all
     selector:
       namespaces: ["${NAMESPACE}"]
-      labelSelectors:
-        pg.platform.local/cluster: "${CLUSTER}"
-        pg.platform.local/role: replica
+      labelSelectors: ${REPLICA_LABELS}
 ---
 apiVersion: chaos-mesh.org/v1alpha1
 kind: NetworkChaos
@@ -48,9 +45,7 @@ spec:
   duration: "${DURATION}"
   selector:
     namespaces: ["${NAMESPACE}"]
-    labelSelectors:
-      pg.platform.local/cluster: "${CLUSTER}"
-      pg.platform.local/role: primary
+    labelSelectors: ${PRIMARY_LABELS}
   target:
     mode: all
     selector:

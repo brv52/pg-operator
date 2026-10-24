@@ -4,6 +4,9 @@
 #
 #   test/chaos/partition.sh NAMESPACE CLUSTER DURATION_SECONDS
 #
+# PRIMARY_SELECTOR and REPLICA_SELECTOR (kubectl -l syntax) pick the pods;
+# they default to pg-operator's labels for CLUSTER.
+#
 # Same fault as partition.yaml. Chaos Mesh implements partition with a
 # list:set ipset, and the stock WSL2 kernel is built without
 # CONFIG_IP_SET_LIST_SET, so there the NetworkChaos objects never inject.
@@ -24,14 +27,14 @@ set -eu
 ns=$1
 cluster=$2
 seconds=$3
+primary_selector=${PRIMARY_SELECTOR:-pg.platform.local/cluster=$cluster,pg.platform.local/role=primary}
+replica_selector=${REPLICA_SELECTOR:-pg.platform.local/cluster=$cluster,pg.platform.local/role=replica}
 
-primary=$(kubectl -n "$ns" get pod -l "pg.platform.local/cluster=$cluster,pg.platform.local/role=primary" \
-	-o jsonpath='{.items[0].metadata.name}')
+primary=$(kubectl -n "$ns" get pod -l "$primary_selector" -o jsonpath='{.items[0].metadata.name}')
 node=$(kubectl -n "$ns" get pod "$primary" -o jsonpath='{.spec.nodeName}')
 cid=$(kubectl -n "$ns" get pod "$primary" -o jsonpath='{.status.containerStatuses[?(@.name=="postgres")].containerID}')
 pid=$(docker exec "$node" crictl inspect --output go-template --template '{{.info.pid}}' "${cid#containerd://}")
-peers=$(kubectl -n "$ns" get pod \
-	-l "pg.platform.local/cluster=$cluster,pg.platform.local/role=replica" -o jsonpath='{.items[*].status.podIP}')
+peers=$(kubectl -n "$ns" get pod -l "$replica_selector" -o jsonpath='{.items[*].status.podIP}')
 peers="$peers $(kubectl -n "$ns" get pod -l app.kubernetes.io/name=pg-checker -o jsonpath='{.items[*].status.podIP}')"
 
 route() { docker exec "$node" nsenter -t "$pid" -n ip route "$@"; }
