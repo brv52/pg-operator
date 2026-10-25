@@ -1,0 +1,12 @@
+{
+  "generated": "2026-10-30T19:55:10Z",
+  "unit": "client-observed write unavailability in milliseconds",
+  "op_p99": null,
+  "op_cnpg_p99": null,
+  "op_faults": null,
+  "op_upgrade": null,
+  "partition_p99": null,
+  "lost_writes": null,
+  "porcupine": null,
+  "series": {}
+}

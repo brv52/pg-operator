@@ -36,6 +36,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -95,7 +96,7 @@ type Metrics struct {
 	OpCNPGP99 *float64 `json:"op_cnpg_p99"`
 	// OpFaults counts injected faults against pg-operator that the
 	// checker verified.
-	OpFaults int `json:"op_faults"`
+	OpFaults *int `json:"op_faults"`
 	// OpUpgrade is the result of the Kubernetes upgrade drill, copied
 	// from bench/upgrade-drill/result.json when present.
 	OpUpgrade    json.RawMessage    `json:"op_upgrade"`
@@ -186,8 +187,8 @@ func aggregate(dir, upgradeFile string, now time.Time) (*Metrics, error) {
 		gaps[key] = append(gaps[key], c.MaxWriteGapMs)
 	}
 
-	var lost int
-	allOK, checked := true, 0
+	var lost, opFaults int
+	allOK, checked, opSeries := true, 0, false
 	for key, s := range m.Series {
 		s.WriteGapMs = dist(gaps[key])
 		s.RecoverySeconds = dist(recovery[key])
@@ -199,9 +200,13 @@ func aggregate(dir, upgradeFile string, now time.Time) (*Metrics, error) {
 		if s.Linearizable != s.Faults-s.CheckerMissing || s.CheckerMissing > 0 {
 			allOK = false
 		}
-		if len(key) > 5 && key[:5] == "pgop-" {
-			m.OpFaults += s.CheckerPassed
+		if strings.HasPrefix(key, "pgop-") {
+			opFaults += s.CheckerPassed
+			opSeries = true
 		}
+	}
+	if opSeries {
+		m.OpFaults = &opFaults
 	}
 	m.OpP99 = p99(m.Series["pgop-podkill"])
 	m.OpCNPGP99 = p99(m.Series["cnpg-podkill"])

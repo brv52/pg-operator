@@ -69,8 +69,16 @@ func TestAggregate(t *testing.T) {
 	if s.Faults != 2 || s.NotInjected != 1 || s.CheckerPassed != 2 || s.PassRate != 1 {
 		t.Fatalf("series = %+v", s)
 	}
-	if m.OpP99 == nil || *m.OpP99 != 3000 || m.OpFaults != 2 {
-		t.Fatalf("op_p99 = %v, op_faults = %d", m.OpP99, m.OpFaults)
+	if m.OpP99 == nil || *m.OpP99 != 3000 || m.OpFaults == nil || *m.OpFaults != 2 {
+		t.Fatalf("op_p99 = %v, op_faults = %v", m.OpP99, m.OpFaults)
+	}
+
+	empty, err := aggregate(filepath.Join(dir, "none"), "", time.Unix(0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.OpFaults != nil || empty.LostWrites != nil || empty.Porcupine != nil {
+		t.Fatal("no runs must aggregate to nulls")
 	}
 	if m.OpCNPGP99 != nil || m.PartitionP99 != nil {
 		t.Fatal("series without runs must stay null")
