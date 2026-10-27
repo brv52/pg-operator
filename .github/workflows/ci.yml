@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: golangci-lint (with the logcheck plugin)
+        run: make lint
+      - name: generated code and manifests are up to date
+        run: |
+          make manifests generate
+          git diff --exit-code
+      - name: shellcheck
+        run: shellcheck internal/pg/scripts/*.sh hack/*.sh test/chaos/*.sh bench/*.sh bench/*/*.sh
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: unit and envtest
+        run: make test
+      - name: bench aggregator and checker
+        run: go test ./bench/... ./test/checker/...
+      - name: instance script against real PostgreSQL
+        run: make test-integration
+
+  e2e:
+    runs-on: ubuntu-24.04
+    needs: [lint, test]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: install k3d
+        run: curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/v5.9.0/install.sh | TAG=v5.9.0 bash
+      - name: cluster
+        run: make cluster-up
+      - name: bootstrap, admission, routing, failover and switchover
+        run: make test-e2e
+      - name: operator logs
+        if: failure()
+        run: |
+          kubectl -n pg-operator-system logs deploy/pg-operator-controller-manager --tail=300
+          kubectl get pgc,pods,events -A
