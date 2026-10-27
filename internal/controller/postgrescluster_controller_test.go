@@ -199,6 +199,9 @@ var _ = Describe("PostgresCluster controller", func() {
 		var pdb policyv1.PodDisruptionBudget
 		Expect(k8sClient.Get(ctx, h.key("db-primary"), &pdb)).To(Succeed())
 		Expect(pdb.Spec.MinAvailable.IntValue()).To(Equal(1))
+		Expect(k8sClient.Get(ctx, h.key("db-replicas"), &pdb)).To(Succeed())
+		Expect(pdb.Spec.MaxUnavailable).To(BeNil())
+		Expect(pdb.Spec.MinAvailable.IntValue()).To(Equal(1), "three instances: one of two standbys may be evicted")
 
 		h.run(h.inst(1))
 		h.fake.primary(h.inst(1), 100)

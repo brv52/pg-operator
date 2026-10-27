@@ -162,6 +162,13 @@ func buildServices(c *pgv1.PostgresCluster) []*corev1.Service {
 // buildPDBs protects the primary from voluntary eviction entirely. A node
 // drain therefore blocks on the primary until the operator has switched
 // over, which relabels the old primary and releases it from this budget.
+// Standbys may be evicted one at a time.
+//
+// Both budgets use an absolute minAvailable. The pods' controller owner is
+// the PostgresCluster, whose scale subresource counts every instance, so
+// the disruption controller would size a maxUnavailable budget for the
+// standbys against all instances (expected 3, healthy 2, allowed 0) and a
+// drain could never evict a standby.
 func buildPDBs(c *pgv1.PostgresCluster) []*policyv1.PodDisruptionBudget {
 	sel := func(role string) *metav1.LabelSelector {
 		l := c.SelectorLabels()
@@ -173,9 +180,10 @@ func buildPDBs(c *pgv1.PostgresCluster) []*policyv1.PodDisruptionBudget {
 		ObjectMeta: objectMeta(c, c.Name+"-primary", nil),
 		Spec:       policyv1.PodDisruptionBudgetSpec{Selector: sel(pgv1.RolePrimary), MinAvailable: &one},
 	}
+	standbysLeft := intstr.FromInt32(max(c.Spec.Instances-2, 0))
 	replicas := &policyv1.PodDisruptionBudget{
 		ObjectMeta: objectMeta(c, c.Name+"-replicas", nil),
-		Spec:       policyv1.PodDisruptionBudgetSpec{Selector: sel(pgv1.RoleReplica), MaxUnavailable: &one},
+		Spec:       policyv1.PodDisruptionBudgetSpec{Selector: sel(pgv1.RoleReplica), MinAvailable: &standbysLeft},
 	}
 	return []*policyv1.PodDisruptionBudget{primary, replicas}
 }
