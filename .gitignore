@@ -28,3 +28,8 @@ go.work
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+
+# Raw checker histories from the upgrade drill; result.json and output.log are kept.
+bench/upgrade-drill/checker/*
+!bench/upgrade-drill/checker/result.json
+!bench/upgrade-drill/checker/output.log

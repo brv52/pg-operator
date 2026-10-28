@@ -1,0 +1,15 @@
+10:13PM INF >>> Kube No Trouble `kubent` <<<
+10:13PM INF version 0.7.3 (git sha 57480c07b3f91238f12a35d0ec88d9368aae99aa)
+10:13PM INF Initializing collectors and retrieving data
+10:13PM INF Target K8s version is 1.37.1
+10:13PM INF Retrieved 0 resources from collector name=Cluster
+10:13PM INF Retrieved 0 resources from collector name="Helm v3"
+10:13PM INF Loaded ruleset name=custom.rego.tmpl
+10:13PM INF Loaded ruleset name=deprecated-1-16.rego
+10:13PM INF Loaded ruleset name=deprecated-1-22.rego
+10:13PM INF Loaded ruleset name=deprecated-1-25.rego
+10:13PM INF Loaded ruleset name=deprecated-1-26.rego
+10:13PM INF Loaded ruleset name=deprecated-1-27.rego
+10:13PM INF Loaded ruleset name=deprecated-1-29.rego
+10:13PM INF Loaded ruleset name=deprecated-1-32.rego
+10:13PM INF Loaded ruleset name=deprecated-future.rego

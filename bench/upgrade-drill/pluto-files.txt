@@ -1,0 +1,1 @@
+There were no resources found with known deprecated apiVersions.

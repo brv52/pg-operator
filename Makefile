@@ -109,6 +109,10 @@ cluster-up: ## Create the 3-node k3d cluster from hack/k3d-config.yaml.
 cluster-down: ## Delete the k3d cluster.
 	k3d cluster delete $(K3D_CLUSTER)
 
+.PHONY: upgrade-drill
+upgrade-drill: manifests kustomize $(PLUTO) $(KUBENT) ## Upgrade a fresh k3s 1.36 cluster to 1.37 under the checker.
+	bench/upgrade-drill/drill.sh
+
 .PHONY: metrics
 metrics: ## Aggregate bench/results into metrics.json.
 	go run ./bench/aggregate -results bench/results -out metrics.json
@@ -237,6 +241,8 @@ CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 GOLANGCI_LINT_CUSTOM = $(LOCALBIN)/golangci-lint-custom-$(GOLANGCI_LINT_VERSION)
+PLUTO ?= $(LOCALBIN)/pluto
+KUBENT ?= $(LOCALBIN)/kubent
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.8.1
@@ -253,6 +259,8 @@ ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
   printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
 
 GOLANGCI_LINT_VERSION ?= v2.13.1
+PLUTO_VERSION ?= v5.24.4
+KUBENT_VERSION ?= 0.7.3
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
 $(KUSTOMIZE): $(LOCALBIN)
@@ -286,6 +294,15 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 # cap as the other builds.
 $(GOLANGCI_LINT_CUSTOM): .custom-gcl.yml | $(GOLANGCI_LINT)
 	GOFLAGS=-p=$(GO_BUILD_PARALLELISM) "$(GOLANGCI_LINT)" custom --destination $(LOCALBIN) --name $(notdir $@)
+
+# Release binaries rather than go install: building them from source is
+# slow and memory hungry, and only the scanners themselves are needed.
+$(PLUTO): | $(LOCALBIN)
+	curl -fsSL https://github.com/FairwindsOps/pluto/releases/download/$(PLUTO_VERSION)/pluto_$(PLUTO_VERSION:v%=%)_linux_amd64.tar.gz \
+		| tar -xz -C "$(LOCALBIN)" pluto
+$(KUBENT): | $(LOCALBIN)
+	curl -fsSL https://github.com/doitintl/kube-no-trouble/releases/download/$(KUBENT_VERSION)/kubent-$(KUBENT_VERSION)-linux-amd64.tar.gz \
+		| tar -xz -C "$(LOCALBIN)" kubent
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary

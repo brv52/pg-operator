@@ -1,0 +1,53 @@
+# system-upgrade-controller Plans that move every k3s node to ${TO_VERSION},
+# the control plane first and then the agents, one node at a time. Each
+# node is cordoned and drained before its k3s binary is replaced, which is
+# the planned maintenance path pg-operator has to handle without losing an
+# acknowledged write: the cordon triggers a switchover away from the
+# primary, the drain then evicts instances within the PodDisruptionBudget.
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: k3s-server
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  version: ${TO_VERSION}
+  serviceAccountName: system-upgrade
+  nodeSelector:
+    matchExpressions:
+      - {key: node-role.kubernetes.io/control-plane, operator: In, values: ["true"]}
+  tolerations:
+    - {operator: Exists}
+  cordon: true
+  drain:
+    force: true
+    ignoreDaemonSets: true
+    deleteEmptydirData: true
+    timeout: 300s
+  upgrade:
+    image: rancher/k3s-upgrade
+---
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: k3s-agent
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  version: ${TO_VERSION}
+  serviceAccountName: system-upgrade
+  nodeSelector:
+    matchExpressions:
+      - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+  prepare:
+    # Agents wait until the server plan is done.
+    image: rancher/k3s-upgrade
+    args: [prepare, k3s-server]
+  cordon: true
+  drain:
+    force: true
+    ignoreDaemonSets: true
+    deleteEmptydirData: true
+    timeout: 300s
+  upgrade:
+    image: rancher/k3s-upgrade
