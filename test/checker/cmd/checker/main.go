@@ -85,18 +85,20 @@ func main() {
 	}
 	history = append(history, finalReads...)
 
-	res := checker.Summarize(history)
+	// The history goes to disk before the checks, so a checker that dies
+	// while checking still leaves something to analyse.
 	visualize := ""
 	if out != "" {
+		writeJSONL(filepath.Join(out, "history.jsonl"), history)
 		visualize = filepath.Join(out, "linearizability.html")
 	}
+	res := checker.Summarize(history)
 	res.Linearizability = checker.CheckLinearizable(history, checkTimeout, visualize)
 	lost, phantom := checker.Reconcile(history, found)
 	res.LostWrites, res.LostTxIDs, res.PhantomWrites = len(lost), lost, phantom
 	res.MaxWriteGap, res.Gaps = checker.WriteGaps(history, 500*time.Millisecond)
 
 	if out != "" {
-		writeJSONL(filepath.Join(out, "history.jsonl"), history)
 		if err := checker.WriteEDN(history, filepath.Join(out, "history.edn")); err != nil {
 			fmt.Fprintln(os.Stderr, "edn export:", err)
 		}

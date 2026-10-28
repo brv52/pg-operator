@@ -17,6 +17,8 @@ limitations under the License.
 package checker
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -174,5 +176,31 @@ func TestWriteGaps(t *testing.T) {
 	widest, gaps := WriteGaps(h, time.Second)
 	if widest.Width != 2000*time.Millisecond || len(gaps) != 1 {
 		t.Fatalf("widest=%v gaps=%v", widest.Width, gaps)
+	}
+}
+
+func TestVisualizesOnlyTheFailingKey(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "lin.html")
+	history := []Op{
+		op(0, KindWrite, 1, 5, 0, 10, StatusOK),
+		op(1, KindRead, 1, 5, 20, 30, StatusOK),
+		op(0, KindWrite, 2, 7, 0, 10, StatusOK),
+		op(1, KindRead, 2, 0, 20, 30, StatusOK),
+	}
+	if got := CheckLinearizable(history, 10*time.Second, out); got != porcupine.Illegal {
+		t.Fatalf("got %v", got)
+	}
+	b, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) == 0 {
+		t.Fatal("empty visualization")
+	}
+
+	ok := filepath.Join(t.TempDir(), "ok.html")
+	CheckLinearizable(history[:2], 10*time.Second, ok)
+	if _, err := os.Stat(ok); !os.IsNotExist(err) {
+		t.Fatal("a linearizable history must not be visualized")
 	}
 }

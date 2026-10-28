@@ -62,15 +62,28 @@ func (r Result) Passed() bool {
 
 // CheckLinearizable runs porcupine over the history. When visualize is not
 // empty and the history is not linearizable, an HTML visualization of the
-// longest linearizable prefix is written there.
+// first key whose sub-history fails is written there.
+//
+// The verbose check that a visualization needs keeps every partial
+// linearization in memory; on the history of an eight-minute run that took
+// the checker past 512 MB and the result was lost. So the plain check
+// decides, and only one failing key is re-checked verbosely.
 func CheckLinearizable(history []Op, timeout time.Duration, visualize string) porcupine.CheckResult {
 	ops := toPorcupine(history)
-	res, info := porcupine.CheckOperationsVerbose(registerModel, ops, timeout)
-	if res != porcupine.Ok && visualize != "" {
+	res := porcupine.CheckOperationsTimeout(registerModel, ops, timeout)
+	if res == porcupine.Ok || visualize == "" {
+		return res
+	}
+	for _, part := range registerModel.Partition(ops) {
+		if porcupine.CheckOperationsTimeout(registerModel, part, timeout) == porcupine.Ok {
+			continue
+		}
+		_, info := porcupine.CheckOperationsVerbose(registerModel, part, timeout)
 		if f, err := os.Create(visualize); err == nil {
 			_ = porcupine.Visualize(registerModel, info, f)
 			_ = f.Close()
 		}
+		break
 	}
 	return res
 }
