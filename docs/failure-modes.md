@@ -86,6 +86,26 @@ record past the new timeline's fork point and can never follow it. The
 election now clears every standby's `primary_conninfo` first and
 re-observes.
 
+### A drain that could never evict a standby
+
+The standby PodDisruptionBudget used `maxUnavailable: 1`. The disruption
+controller sizes such a budget from the pods' controller owner, and the
+PostgresCluster's scale subresource counts every instance, primary
+included: it expected three pods, found two healthy standbys and allowed
+zero disruptions. Every drain therefore stalled on a standby. Unit tests
+and the cordon e2e scenario never drained a standby; the k3s upgrade
+drill did, and hung. The budget now uses an absolute `minAvailable`.
+
+### Measuring through a rolling node restart
+
+On k3d, upgrading a node restarts its k3s, which restarts the node
+container and every pod on it. The first drill ran the checker as a Job
+in the cluster, so a drain evicted it and its history was lost. The drill
+now runs the checker outside the cluster. Its eight-minute history then
+pushed Porcupine's verbose mode past the checker's memory limit after
+the workload finished; the verbose pass now runs only on a key that
+fails.
+
 ### Partition injection
 
 Chaos Mesh implements `NetworkChaos` partitions with a `list:set` ipset.

@@ -53,13 +53,25 @@ k3s v1.36.5 → v1.37.1 with system-upgrade-controller, one node at a
 time, each cordoned and drained, under the checker
 (`bench/upgrade-drill`).
 
+The checker runs outside the cluster here, in a container on the k3d
+network, and reaches the primary through a NodePort on every node with a
+multi-host connection string and `target_session_attrs=read-write`:
+upgrading a node restarts every pod on it, the checker included.
+
+Recorded 2026-10-30 (`bench/upgrade-drill/result.json`):
+
 | | |
 |---|---|
-| nodes upgraded | not yet run |
-| primary changes | not yet run |
-| write gap max | not yet run |
-| linearizable, lost writes | not yet run |
-| removed APIs in use (pluto) | not yet run |
+| nodes upgraded | 3 of 3, in 114 s |
+| primary changes | 2 |
+| operations | 128,467 over 8 min; 328 failed cleanly, 5 indeterminate |
+| linearizable | Ok |
+| lost / phantom writes | 0 / 0 |
+| widest write gap | 5.1 s |
+| removed APIs in use (pluto) | 0 |
+
+One run is one sample; the drill is there to show the maintenance path
+works end to end, not to put a percentile on it.
 
 ## Reproducing
 

@@ -49,10 +49,11 @@ the widest gap between two acknowledged writes as the client saw it.
 | Partition, write gap p99 | pending | — |
 | Faults verified by the checker | pending | |
 | Lost acknowledged writes | pending | |
-| k3s 1.36 → 1.37 upgrade under load | pending | |
+| k3s 1.36 → 1.37 rolling upgrade under load | passed: 3 nodes in 114 s, 2 primary changes, 128k ops linearizable, 0 lost writes, widest write gap 5.1 s | |
 
-"Pending" means the long runs have not been recorded yet; nothing here is
-estimated.
+"Pending" means the long fault runs have not been recorded yet; nothing
+here is estimated. The upgrade row is one recorded drill
+(`bench/upgrade-drill/result.json`).
 
 ## Quick start
 
