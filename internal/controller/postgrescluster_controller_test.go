@@ -133,6 +133,19 @@ func (h *harness) restart(name string) {
 	Expect(k8sClient.Status().Update(ctx, p)).To(Succeed())
 }
 
+// crashLoop plays postgres in the pod failing to start again, leaving the
+// container waiting in CrashLoopBackOff.
+func (h *harness) crashLoop(name string) {
+	GinkgoHelper()
+	h.restart(name)
+	p := h.pod(name)
+	cs := &p.Status.ContainerStatuses[0]
+	cs.Ready = false
+	cs.State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
+	cs.LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}}
+	Expect(k8sClient.Status().Update(ctx, p)).To(Succeed())
+}
+
 func (h *harness) kill(name string) {
 	GinkgoHelper()
 	p := h.pod(name)
@@ -569,6 +582,34 @@ var _ = Describe("PostgresCluster controller", func() {
 		h.fake.standby(h.inst(2), 100, true)
 		h.tick()
 		Expect(attempts()).To(BeEmpty(), "streaming again resets the count")
+	})
+
+	It("recreates a crash-looping standby", func() {
+		h.healthy()
+		// A torn checkpoint record: postgres panics on every start, so
+		// the container is mostly waiting in CrashLoopBackOff and only
+		// briefly running.
+		h.fake.down(h.inst(2))
+		start := h.clock
+		for range 6 {
+			h.crashLoop(h.inst(2))
+			h.tick()
+			if h.pod(h.inst(2)) == nil {
+				break
+			}
+			h.clock = h.clock.Add(stuckAfter / 3)
+			h.restart(h.inst(2))
+			h.tick()
+			if h.pod(h.inst(2)) == nil {
+				break
+			}
+		}
+		Expect(h.pod(h.inst(2))).To(BeNil(), "a standby that keeps failing to start is recreated")
+		Expect(h.clock.Sub(start)).To(BeNumerically(">=", stuckAfter), "but not before stuckAfter")
+		var pvc corev1.PersistentVolumeClaim
+		Expect(k8sClient.Get(ctx, h.key(h.inst(2)), &pvc)).To(Succeed())
+		Expect(pvc.Annotations).To(HaveKeyWithValue(pgv1.AnnotationRejoinAttempts, "1"))
+		Expect(h.fake.promotedNames()).To(BeEmpty())
 	})
 
 	It("does not mistake replicas that never streamed for a partition", func() {

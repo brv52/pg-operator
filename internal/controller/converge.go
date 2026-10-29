@@ -150,7 +150,10 @@ const stuckAfter = 2 * time.Minute
 //     follow the timeline switch, typically a former primary whose
 //     container restarted in place (the self-fence kept it out of service
 //     but it still carries diverged WAL).
-//   - running but unreachable or not streaming for longer than stuckAfter.
+//   - started but unreachable or not streaming for longer than stuckAfter,
+//     crash-looping included. A standby whose data directory is damaged
+//     (a torn checkpoint record after an abrupt stop, say) fails every
+//     start and only a reclone brings it back.
 //     A standby can hold WAL the primary does not have at the same LSNs on
 //     the same timeline, when the primary lost the tail of its WAL in a
 //     crash after streaming it. Recovery then stops at the first record
@@ -172,7 +175,7 @@ func (rc *round) recreateDivergedStandbys(ctx context.Context, p *instance) erro
 		}
 		lagging := s.obs.Reachable && s.obs.InRecovery && !s.obs.Streaming && !s.terminating() &&
 			s.obs.Timeline < p.obs.Timeline
-		stuck := s.postgresRunning() && !s.terminating() &&
+		stuck := s.postgresStarted() && !s.terminating() &&
 			(!s.obs.Reachable || s.obs.InRecovery && !s.obs.Streaming)
 		window := stuckAfter
 		if lagging {

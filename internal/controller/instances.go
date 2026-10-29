@@ -47,15 +47,18 @@ func (i *instance) role() string {
 	return i.pod.Labels[pgv1.LabelRole]
 }
 
-// postgresRunning reports whether the postgres container has started, as
-// opposed to the pod still running its init container.
-func (i *instance) postgresRunning() bool {
+// postgresStarted reports whether the postgres container has started at
+// least once, as opposed to the pod still being scheduled or running its
+// init container (a clone of a large standby legitimately takes a while).
+// A container in CrashLoopBackOff counts as started: it is waiting between
+// failed starts, not initializing.
+func (i *instance) postgresStarted() bool {
 	if i.pod == nil {
 		return false
 	}
 	for _, cs := range i.pod.Status.ContainerStatuses {
 		if cs.Name == containerPostgres {
-			return cs.State.Running != nil
+			return cs.State.Running != nil || cs.RestartCount > 0 || cs.LastTerminationState.Terminated != nil
 		}
 	}
 	return false
