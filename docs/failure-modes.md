@@ -14,7 +14,7 @@ bugs that fault injection found along the way. Measured numbers live in
 | Primary's node cordoned or drained | `Unschedulable` on the node | switchover with graceful shutdown | a short write gap; no failed transaction is lost |
 | Standby killed | pod missing | recreated on its volume, catches up | nothing, if the quorum still has a member |
 | Standby on an old timeline after a failover | timeline, for `divergedAfter` | recreated, rejoins via `pg_rewind` | nothing |
-| Standby running but stuck (unreachable or not streaming) | for `stuckAfter` | recreated; rewind first, reclone after | nothing |
+| Standby stuck: unreachable, not streaming, or crash-looping | for `stuckAfter` | recreated; rewind first, reclone after | nothing |
 | Operator restarts mid-failover | — | resumes the persisted phase | the failover takes longer |
 | Whole cluster restarts (all nodes) | — | waits for a quorum; never promotes on partial evidence | unavailable until the instances are back |
 
@@ -76,6 +76,18 @@ reclones. The likely cause is that an fsync inside a WSL2 VM is not
 durable across a crash of the VM. That is a property of the test host,
 but the same shape (a replica with WAL its primary lost) appears on real
 hardware with a lying disk cache, so the operator has to handle it.
+
+### A standby that crash-loops on a damaged data directory
+
+After the cluster's nodes were stopped abruptly, one standby came back
+with a torn checkpoint record and PostgreSQL panicked on every start
+("could not locate a valid checkpoint record"). The stuck-standby check
+only looked at containers in the Running state, and a crash-looping one
+is mostly waiting in CrashLoopBackOff, so it was never recreated. It sat
+there for over fifteen minutes with the cluster down to one standby.
+Any container that has started at least once now counts. After
+`stuckAfter` the standby is recreated, and since one rejoin had already
+failed it was recloned and streaming again within a minute.
 
 ### Freeze before the election
 
